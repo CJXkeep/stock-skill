@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""Render an A-share close snapshot into the fixed HTML report template."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import html
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+
+PLACEHOLDER_RE = re.compile(r"{{([a-zA-Z0-9_]+)}}")
+
+
+def validate_date(value: str) -> str:
+    try:
+        return dt.date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("date must use YYYY-MM-DD format") from exc
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def esc(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    return html.escape(str(value), quote=True)
+
+
+def truncate(value: Any, limit: int = 220) -> str:
+    text = "" if value is None else str(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "..."
+
+
+def pct_class(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if number > 0:
+        return "up"
+    if number < 0:
+        return "down"
+    return ""
+
+
+def format_pct(value: Any) -> str:
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def format_number(value: Any, digits: int = 2) -> str:
+    try:
+        return f"{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def format_amount_cny(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if abs(number) >= 100_000_000:
+        return f"{number / 100_000_000:,.0f} 亿"
+    return f"{number:,.0f}"
+
+
+def list_items(values: list[Any], fallback: str) -> str:
+    items = [v for v in values if v not in (None, "")]
+    if not items:
+        items = [fallback]
+    return "\n".join(f"<li>{esc(item)}</li>" for item in items)
+
+
+def as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def analysis_value(analysis: dict[str, Any], key: str, fallback: Any = None) -> Any:
+    return analysis.get(key, fallback)
+
+
+def average_index_change(snapshot: dict[str, Any]) -> float | None:
+    changes = []
+    for item in snapshot.get("indexes", []):
+        value = item.get("change_pct")
+        try:
+            changes.append(float(value))
+        except (TypeError, ValueError):
+            pass
+    if not changes:
+        return None
+    return sum(changes) / len(changes)
+
+
+def breadth_ratio(snapshot: dict[str, Any]) -> float | None:
+    breadth = snapshot.get("breadth") or {}
+    if breadth.get("is_partial"):
+        return None
+    rising = breadth.get("rising")
+    falling = breadth.get("falling")
+    try:
+        total = float(rising) + float(falling)
+        if total <= 0:
+            return None
+        return float(rising) / total
+    except (TypeError, ValueError):
+        return None
+
+
+def infer_temperature(snapshot: dict[str, Any]) -> str:
+    avg = average_index_change(snapshot)
+    ratio = breadth_ratio(snapshot)
+    if avg is None and ratio is None:
+        return "数据不足"
+    if avg is not None and avg <= -1.0 and (ratio is None or ratio < 0.35):
+        return "风险释放"
+    if avg is not None and avg < -0.3:
+        return "偏弱防守"
+    if avg is not None and avg >= 0.8 and (ratio is None or ratio > 0.60):
+        return "强势进攻"
+    if avg is not None and avg > 0:
+        return "修复偏强"
+    return "中性震荡"
+
+
+def default_conclusion(snapshot: dict[str, Any], temperature: str) -> str:
+    notes = snapshot.get("notes") or []
+    if temperature == "数据不足":
+        return "今日免费源数据不完整，先以数据质量核查和人工补充为主，暂不做强结论。"
+    if (snapshot.get("breadth") or {}).get("is_partial"):
+        return f"今日A股暂归为{temperature}，但宽度样本不完整，市场温度需要等全量涨跌家数交叉验证。"
+    if notes:
+        return f"今日A股暂归为{temperature}，但存在数据缺口，结论需要结合补充数据交叉验证。"
+    return f"今日A股暂归为{temperature}，重点观察指数表现、市场宽度和主线持续性是否互相确认。"
+
+
+def render_index_rows(snapshot: dict[str, Any]) -> str:
+    rows = []
+    for item in snapshot.get("indexes", []):
+        change = item.get("change_pct")
+        cls = pct_class(change)
+        rows.append(
+            "<tr>"
+            f"<td>{esc(item.get('name'))}</td>"
+            f"<td>{esc(format_number(item.get('close')))}</td>"
+            f"<td class=\"{cls}\">{esc(format_pct(change))}</td>"
+            f"<td>{esc(index_comment(item))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return '<tr><td colspan="4">主要指数数据缺失，需要补充或交叉验证。</td></tr>'
+    return "\n".join(rows)
+
+
+def index_comment(item: dict[str, Any]) -> str:
+    change = item.get("change_pct")
+    try:
+        number = float(change)
+    except (TypeError, ValueError):
+        return "缺少涨跌幅"
+    if number >= 1:
+        return "明显走强"
+    if number > 0:
+        return "小幅走强"
+    if number <= -1:
+        return "明显承压"
+    if number < 0:
+        return "小幅承压"
+    return "持平"
+
+
+def leading_names(items: list[dict[str, Any]], limit: int = 5) -> list[str]:
+    names = []
+    for item in items[:limit]:
+        name = item.get("name")
+        pct = item.get("change_pct")
+        if name:
+            names.append(f"{name} {format_pct(pct)}")
+    return names
+
+
+def render_theme_tags(snapshot: dict[str, Any]) -> str:
+    tags = leading_names((snapshot.get("themes") or {}).get("active", []), 6)
+    if not tags:
+        tags = leading_names((snapshot.get("sectors") or {}).get("leading", []), 6)
+    if not tags:
+        return '<span class="tag">主线数据缺失</span>'
+    return "".join(f'<span class="tag">{esc(tag)}</span>' for tag in tags)
+
+
+def turnover_text(snapshot: dict[str, Any]) -> tuple[str, str]:
+    turnover = snapshot.get("turnover") or {}
+    amount = format_amount_cny(turnover.get("amount_cny"))
+    note = "全量待确认" if turnover.get("is_partial") else "来自快照数据"
+    if amount == "-":
+        note = "缺少成交额数据"
+    return amount, note
+
+
+def breadth_text(snapshot: dict[str, Any]) -> tuple[str, str]:
+    breadth = snapshot.get("breadth") or {}
+    rising = breadth.get("rising")
+    falling = breadth.get("falling")
+    if rising is None or falling is None:
+        return "-", "缺少涨跌家数"
+    note = "样本偏差" if breadth.get("is_partial") else "全量或接近全量"
+    return f"{rising}/{falling}", note
+
+
+def limit_text(snapshot: dict[str, Any]) -> tuple[str, str]:
+    stats = snapshot.get("limit_stats") or {}
+    up = stats.get("limit_up_count")
+    down = stats.get("limit_down_count")
+    if up is None and down is None:
+        return "-", "缺少涨跌停数据"
+    return f"{up if up is not None else '-'}/{down if down is not None else '-'}", "涨停/跌停"
+
+
+def market_structure(snapshot: dict[str, Any]) -> str:
+    avg = average_index_change(snapshot)
+    ratio = breadth_ratio(snapshot)
+    parts = []
+    if avg is not None:
+        parts.append(f"主要指数平均涨跌幅约 {avg:+.2f}%")
+    if ratio is not None:
+        parts.append(f"上涨占比约 {ratio * 100:.0f}%")
+    if (snapshot.get("breadth") or {}).get("is_partial"):
+        parts.append("宽度样本为部分数据，结构判断需谨慎")
+    if not parts:
+        return "市场结构数据不足，需要补充指数、涨跌家数、成交额和板块表现。"
+    return "；".join(parts) + "。"
+
+
+def theme_commentary(snapshot: dict[str, Any]) -> str:
+    active = leading_names((snapshot.get("themes") or {}).get("active", []), 3)
+    weak = leading_names((snapshot.get("themes") or {}).get("weak", []), 3)
+    if not active and not weak:
+        return "题材与板块数据不足，暂不判断主线持续性。"
+    text = []
+    if active:
+        text.append("活跃方向：" + "、".join(active))
+    if weak:
+        text.append("弱势方向：" + "、".join(weak))
+    return "；".join(text) + "。"
+
+
+def data_quality_items(snapshot: dict[str, Any]) -> list[str]:
+    items = [
+        f"数据源：{', '.join(snapshot.get('sources') or ['无成功来源'])}",
+        f"抓取时间：{snapshot.get('retrieved_at', '-')}",
+    ]
+    items.extend(snapshot.get("notes") or [])
+    for error in snapshot.get("errors", [])[:5]:
+        items.append(f"{error.get('source', 'source')}：{truncate(error.get('message', ''))}")
+    return items
+
+
+def default_tomorrow_items(snapshot: dict[str, Any]) -> list[str]:
+    items = [
+        "成交额能否放大并与指数方向一致。",
+        "上涨/下跌家数能否改善，避免指数强而个股弱。",
+        "今日活跃主题的前排能否继续强势，后排是否扩散。",
+        "跌停数量、炸板和高位回撤是否继续恶化。",
+    ]
+    if not snapshot.get("indexes"):
+        items.insert(0, "先补充主要指数收盘和涨跌幅，确认复盘基准。")
+    return items
+
+
+def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[str, str]:
+    temperature = analysis_value(analysis, "market_temperature") or infer_temperature(snapshot)
+    turnover, turnover_note = turnover_text(snapshot)
+    rising_falling, breadth_note = breadth_text(snapshot)
+    limit_up_down, limit_note = limit_text(snapshot)
+    risks = as_list(analysis_value(analysis, "risks")) or (snapshot.get("notes") or [])
+    catalysts = as_list(analysis_value(analysis, "catalysts")) or [
+        "暂无足够催化信息，需结合政策、宏观、海外市场和公告进一步归因。"
+    ]
+    tomorrow = as_list(analysis_value(analysis, "tomorrow_observations")) or default_tomorrow_items(snapshot)
+    return {
+        "date": esc(snapshot.get("date")),
+        "retrieved_at": esc(snapshot.get("retrieved_at")),
+        "sources": esc(", ".join(snapshot.get("sources") or ["无成功来源"])),
+        "market_temperature": esc(temperature),
+        "one_sentence_conclusion": esc(
+            analysis_value(analysis, "one_sentence_conclusion")
+            or default_conclusion(snapshot, temperature)
+        ),
+        "turnover": esc(turnover),
+        "turnover_note": esc(turnover_note),
+        "rising_falling": esc(rising_falling),
+        "breadth_note": esc(breadth_note),
+        "limit_up_down": esc(limit_up_down),
+        "limit_note": esc(limit_note),
+        "main_line_strength": esc(analysis_value(analysis, "main_line_strength", "待确认")),
+        "main_line_note": esc(analysis_value(analysis, "main_line_note", "需结合持续性和扩散度")),
+        "index_rows": render_index_rows(snapshot),
+        "market_structure": esc(analysis_value(analysis, "market_structure") or market_structure(snapshot)),
+        "theme_tags": render_theme_tags(snapshot),
+        "theme_commentary": esc(analysis_value(analysis, "theme_commentary") or theme_commentary(snapshot)),
+        "catalyst_items": list_items(catalysts, "暂无足够催化信息。"),
+        "risk_items": list_items(risks, "暂无明显风险信号，但需继续观察。"),
+        "tomorrow_items": list_items(tomorrow, "继续观察成交额、宽度、主线和风险扩散。"),
+        "data_quality_items": list_items(data_quality_items(snapshot), "数据质量信息缺失。"),
+    }
+
+
+def render_template(template: str, context: dict[str, str]) -> str:
+    unknown = sorted(set(PLACEHOLDER_RE.findall(template)) - set(context))
+    if unknown:
+        raise ValueError("Template contains unsupported placeholders: " + ", ".join(unknown))
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return context[key]
+
+    return PLACEHOLDER_RE.sub(replace, template)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Render a fixed HTML A-share close review report from snapshot JSON."
+    )
+    parser.add_argument("snapshot", type=Path, help="Snapshot JSON from collect_a_share_close.py.")
+    parser.add_argument(
+        "--analysis",
+        type=Path,
+        help="Optional analysis JSON with narrative fields overriding generated defaults.",
+    )
+    parser.add_argument(
+        "--template",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "assets" / "close-report-template.html",
+        help="HTML template path.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Output HTML path. Defaults to reports/a-share-close-YYYY-MM-DD.html.",
+    )
+    parser.add_argument(
+        "--date",
+        type=validate_date,
+        help="Override report date for output naming.",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    snapshot = read_json(args.snapshot)
+    analysis = read_json(args.analysis) if args.analysis else {}
+    if args.date:
+        snapshot["date"] = args.date
+    report_date = snapshot.get("date") or dt.date.today().isoformat()
+    output = args.output or Path(f"reports/a-share-close-{report_date}.html")
+    template = args.template.read_text(encoding="utf-8")
+    context = build_context(snapshot, analysis)
+    html_text = render_template(template, context)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(html_text, encoding="utf-8")
+    print(str(output))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

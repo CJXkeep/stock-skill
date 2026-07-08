@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A股收盘复盘｜{{date}}</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d8dee8;
+      --panel: #ffffff;
+      --red: #c2410c;
+      --green: #15803d;
+      --blue: #1d4ed8;
+      --amber: #b45309;
+      --shadow: 0 10px 30px rgba(20, 31, 54, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: end;
+      padding: 22px 0 18px;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(24px, 4vw, 40px);
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      text-align: right;
+    }
+
+    .temperature {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 112px;
+      min-height: 36px;
+      padding: 7px 12px;
+      border: 1px solid var(--ink);
+      background: #fff7ed;
+      color: var(--amber);
+      font-weight: 700;
+    }
+
+    .conclusion {
+      margin: 22px 0;
+      padding: 20px 22px;
+      background: var(--panel);
+      border-left: 6px solid var(--blue);
+      box-shadow: var(--shadow);
+    }
+
+    .conclusion .label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .conclusion p {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .metrics {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 18px;
+    }
+
+    .metric {
+      min-height: 92px;
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    .metric .name {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    .metric .note {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .up {
+      color: var(--red);
+    }
+
+    .down {
+      color: var(--green);
+    }
+
+    .section-grid {
+      grid-template-columns: 1.15fr 0.85fr;
+      align-items: start;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 18px;
+    }
+
+    section h2 {
+      font-size: 17px;
+      margin-bottom: 12px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      background: #f8fafc;
+    }
+
+    ul, ol {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    li + li {
+      margin-top: 8px;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tag {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      font-size: 13px;
+    }
+
+    footer {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 820px) {
+      header,
+      .section-grid,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .meta {
+        text-align: left;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      main {
+        width: 100%;
+        padding: 0;
+      }
+
+      .conclusion,
+      .metric {
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>A股收盘复盘</h1>
+        <p class="meta">交易日：{{date}}｜抓取时间：{{retrieved_at}}｜数据源：{{sources}}</p>
+      </div>
+      <div class="temperature">{{market_temperature}}</div>
+    </header>
+
+    <div class="conclusion">
+      <div class="label">一句话结论</div>
+      <p>{{one_sentence_conclusion}}</p>
+    </div>
+
+    <div class="grid metrics">
+      <div class="metric">
+        <div class="name">两市成交额</div>
+        <div class="value">{{turnover}}</div>
+        <div class="note">{{turnover_note}}</div>
+      </div>
+      <div class="metric">
+        <div class="name">涨跌家数</div>
+        <div class="value">{{rising_falling}}</div>
+        <div class="note">{{breadth_note}}</div>
+      </div>
+      <div class="metric">
+        <div class="name">涨停/跌停</div>
+        <div class="value">{{limit_up_down}}</div>
+        <div class="note">{{limit_note}}</div>
+      </div>
+      <div class="metric">
+        <div class="name">主线强度</div>
+        <div class="value">{{main_line_strength}}</div>
+        <div class="note">{{main_line_note}}</div>
+      </div>
+    </div>
+
+    <div class="grid section-grid">
+      <div class="stack">
+        <section>
+          <h2>主要指数</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>指数</th>
+                <th>收盘</th>
+                <th>涨跌幅</th>
+                <th>解读</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{index_rows}}
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h2>市场结构</h2>
+          <p>{{market_structure}}</p>
+        </section>
+
+        <section>
+          <h2>主线与轮动</h2>
+          <div class="tag-row">{{theme_tags}}</div>
+          <p style="margin-top:12px;">{{theme_commentary}}</p>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section>
+          <h2>异动归因</h2>
+          <ol>
+            {{catalyst_items}}
+          </ol>
+        </section>
+
+        <section>
+          <h2>风险信号</h2>
+          <ul>
+            {{risk_items}}
+          </ul>
+        </section>
+
+        <section>
+          <h2>明日观察</h2>
+          <ol>
+            {{tomorrow_items}}
+          </ol>
+        </section>
+
+        <section>
+          <h2>数据质量</h2>
+          <ul>
+            {{data_quality_items}}
+          </ul>
+        </section>
+      </div>
+    </div>
+
+    <footer>
+      本报告用于市场复盘和交易环境观察，不构成个性化投资建议。
+    </footer>
+  </main>
+</body>
+</html>
