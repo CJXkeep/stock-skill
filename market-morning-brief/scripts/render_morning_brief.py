@@ -126,7 +126,7 @@ def quote_metric_cards(items: list[Any]) -> str:
             "观察大盘权重和风险偏好",
         ),
         (
-            "金银铜",
+            "金银铜期货",
             None,
             multi_quote_label(items, [("GC=F", "金"), ("SI=F", "银"), ("HG=F", "铜")], "金银铜"),
             "观察贵金属、有色金属映射",
@@ -135,7 +135,7 @@ def quote_metric_cards(items: list[Any]) -> str:
     cards = []
     for title, item, fallback_value, note in metrics:
         pct = item.get("pct") if item else None
-        name = item.get("name") if item else ("黄金/白银/铜" if title == "金银铜" else fallback_value)
+        name = item.get("name") if item else ("黄金/白银/铜期货" if title == "金银铜期货" else fallback_value)
         cards.append(
             '<div class="metric">'
             f'<div class="name">{esc(title)}</div>'
@@ -253,7 +253,7 @@ def asset_heat_rows(items: list[Any]) -> str:
     groups = [
         ("全球权益", ["^GSPC", "^IXIC", "^DJI", "^SOX", "^HSI", "KWEB"], "平均涨跌幅"),
         ("汇率利率", ["CNH=X", "^TNX"], "平均变动，不直接代表风险偏好方向"),
-        ("金银铜", ["GC=F", "SI=F", "HG=F"], "金/银/铜平均涨跌幅"),
+        ("金银铜期货", ["GC=F", "SI=F", "HG=F"], "金/银/铜期货平均涨跌幅"),
         ("大宗商品", ["GC=F", "SI=F", "CL=F", "HG=F"], "商品平均涨跌幅"),
     ]
     rows = []

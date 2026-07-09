@@ -21,7 +21,7 @@ Prefer inputs in this order:
 2. Turnover and breadth: total成交额, change versus prior day, rising/falling stocks, limit-up/limit-down count, 连板高度.
 3. Sector and theme performance: leading/lagging industries, concept themes, market-cap style, growth/value split.
 4. Capital and flow clues: northbound if available, ETF/large-cap flow clues, main-board versus small-cap activity.
-5. Catalyst context: policy, macro, overseas markets, commodity/FX/rates, company or industry news.
+5. Catalyst context: policy, macro, overseas markets, commodity/FX/rates, company or industry news. For metals, use futures quotes as the primary data and A-share metal sectors/themes only as mapping evidence.
 6. Intraday behavior: gap, opening direction, afternoon rebound/fade, close strength, volume-price relationship.
 
 When live structured data access is unavailable but browsing/search is available, use [references/web-research-fallback.md](references/web-research-fallback.md) to search public pages for missing market facts, catalysts, and public收评 narratives. Run `scripts/collect_web_research_fallback.py --date YYYY-MM-DD` when a portable search evidence bundle is useful. Use `scripts/prepare_llm_analysis_context.py` to combine snapshot and web evidence into a strict LLM synthesis context. Use the LLM to organize the evidence into language, not to invent missing numbers.

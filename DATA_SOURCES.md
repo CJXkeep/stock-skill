@@ -41,6 +41,7 @@ Current symbols:
 | Source | Code path | Fields | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Tencent `qt.gtimg.cn` | `collect_tencent_indexes` | Major A-share index levels and changes | Active fallback | Worked in the latest source audit. Index-only; not suitable for breadth or sectors. |
+| Yahoo Finance public chart endpoint (`query1` then `query2`) | `collect_yahoo_metal_futures` | COMEX gold, silver, and copper futures direction | Active commodity source | Public delayed futures data. This is the primary automated source for the close report's metals module. |
 | AkShare `stock_zh_a_spot` / `stock_zh_a_spot_em` | `collect_akshare_a_stock_breadth` | A-share breadth and approximate turnover aggregation | Active primary | Use `is_partial`, `sample_size`, and source notes. Approximate turnover should be treated as vendor-derived. |
 | AkShare/THS `stock_board_industry_summary_ths` | `collect_akshare_ths_industry_summary` | Industry leading/lagging, industry breadth, metals sectors | Active primary | Good for structure and sector direction. Vendor taxonomy, not official classification. |
 | AkShare/THS `stock_board_concept_summary_ths` | `collect_akshare_ths_concept_summary` | Concept/event clues, metal-related themes | Active context source | This is partly an event/concept summary, not always a涨幅 ranking. Use as theme clue, not proof of theme strength by itself. |
@@ -71,6 +72,7 @@ A close report is considered structurally usable only when these fields are pres
 - `breadth.rising` and `breadth.falling`
 - `limit_stats.limit_up_count` and `limit_stats.limit_down_count`
 - at least one of `sectors.leading` or `sectors.lagging`
+- `metals.futures` must include usable gold, silver, and copper futures quotes (`GC=F`, `SI=F`, `HG=F`) with price, previous close, and change percentage; A-share metal sectors/themes are mapping evidence, not the primary metals data
 
 A morning brief is considered structurally usable only when these fields are present:
 
@@ -78,6 +80,7 @@ A morning brief is considered structurally usable only when these fields are pre
 - at least one global equity clue
 - at least one FX/rate clue
 - at least one commodity clue
+- gold, silver, and copper futures quotes (`GC=F`, `SI=F`, `HG=F`) must each have usable price, previous close, and change percentage
 - `impact_paths`
 - non-placeholder policy, industry, and company/event evidence when the brief is used as an active information push
 

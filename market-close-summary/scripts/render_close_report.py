@@ -540,6 +540,11 @@ def render_theme_detail_rows(items: list[dict[str, Any]], empty_text: str, limit
     return "\n".join(rows)
 
 
+def metal_futures(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    metals = snapshot.get("metals") or {}
+    return [item for item in as_list(metals.get("futures")) if isinstance(item, dict)]
+
+
 def metal_items(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     metals = snapshot.get("metals") or {}
     sectors = [item for item in as_list(metals.get("sectors")) if isinstance(item, dict)]
@@ -558,17 +563,44 @@ def metal_items(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], list[di
 
 
 def metal_summary(snapshot: dict[str, Any]) -> str:
+    futures = metal_futures(snapshot)
     sectors, themes = metal_items(snapshot)
     parts = []
+    future_names = leading_names(futures, 5)
     sector_names = leading_names(sectors, 5)
     theme_names = leading_names(themes, 5)
+    if future_names:
+        parts.append("期货主数据：" + "、".join(future_names))
     if sector_names:
-        parts.append("相关行业：" + "、".join(sector_names))
+        parts.append("A股映射行业：" + "、".join(sector_names))
     if theme_names:
-        parts.append("相关题材：" + "、".join(theme_names))
+        parts.append("A股映射题材：" + "、".join(theme_names))
     if not parts:
-        return "本次结构化快照未命中金银铜/有色金属相关行业或题材，需结合商品期货和行业页面进一步核对。"
+        return "本次结构化快照未取得金银铜期货行情，需先补充商品期货源，再观察A股有色行业映射。"
     return "；".join(parts) + "。"
+
+
+def render_metal_future_detail_rows(items: list[dict[str, Any]]) -> str:
+    rows = []
+    for item in items:
+        change = item.get("change")
+        pct = item.get("change_pct")
+        rows.append(
+            "<tr>"
+            f"<td>{esc(item.get('name'))}</td>"
+            f"<td>{esc(item.get('symbol'))}</td>"
+            f"<td>{esc(format_number(item.get('price'), 4))}</td>"
+            f"<td>{esc(format_number(item.get('previous'), 4))}</td>"
+            f"<td class=\"{pct_class(change)}\">{esc(format_number(change, 4))}</td>"
+            f"<td class=\"{pct_class(pct)}\">{esc(format_pct(pct))}</td>"
+            f"<td>{esc(item.get('currency'))}</td>"
+            f"<td>{esc(item.get('exchange'))}</td>"
+            f"<td>{esc(item.get('source'))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return '<tr><td colspan="9">金银铜期货行情缺失。</td></tr>'
+    return "\n".join(rows)
 
 
 def render_data_quality_detail(snapshot: dict[str, Any], analysis: dict[str, Any]) -> str:
@@ -654,6 +686,30 @@ def data_quality_items(snapshot: dict[str, Any]) -> list[str]:
     return items
 
 
+def default_risk_items(snapshot: dict[str, Any]) -> list[str]:
+    items = []
+    ratio = breadth_ratio(snapshot, allow_partial=True)
+    avg = average_index_change(snapshot)
+    if avg is not None and avg > 1.0 and ratio is not None and ratio < 0.5:
+        items.append("指数明显上涨但上涨家数不足半数，注意权重和主题行情掩盖个股分化。")
+    stats = snapshot.get("limit_stats") or {}
+    try:
+        up = float(stats.get("limit_up_count"))
+        down = float(stats.get("limit_down_count"))
+        if down > 0 and up / down < 3:
+            items.append("涨停相对跌停优势不强，短线情绪仍需看次日接力和亏钱效应。")
+    except (TypeError, ValueError):
+        pass
+    if (snapshot.get("breadth") or {}).get("is_partial"):
+        items.append("涨跌家数样本不完整，市场宽度判断需要进一步核验。")
+    if not items:
+        items = [
+            "大涨后观察成交额能否维持，若缩量回落，指数修复可能转为分化。",
+            "观察强势主线是否继续扩散，若只剩前排个股，短线追高风险上升。",
+        ]
+    return items
+
+
 def default_tomorrow_items(snapshot: dict[str, Any]) -> list[str]:
     items = [
         "成交额能否放大并与指数方向一致。",
@@ -672,7 +728,7 @@ def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[st
     turnover, turnover_note = turnover_text(snapshot)
     rising_falling, breadth_note = breadth_text(snapshot)
     limit_up_down, limit_note = limit_text(snapshot)
-    risks = as_list(analysis_value(analysis, "risks")) or (snapshot.get("notes") or [])
+    risks = as_list(analysis_value(analysis, "risks")) or (snapshot.get("notes") or []) or default_risk_items(snapshot)
     catalysts = as_list(analysis_value(analysis, "catalysts")) or [
         "暂无足够催化信息，需结合政策、宏观、海外市场和公告进一步归因。"
     ]
@@ -726,17 +782,23 @@ def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[st
             (snapshot.get("themes") or {}).get("weak", []), "弱势题材明细缺失。"
         ),
         "metal_summary": esc(metal_summary(snapshot)),
+        "metal_futures_bars": render_rank_bars(
+            metal_futures(snapshot), "金银铜期货行情缺失。", limit=8
+        ),
         "metal_sector_bars": render_rank_bars(
-            metal_items(snapshot)[0], "未命中金银铜/有色相关行业。", limit=8
+            metal_items(snapshot)[0], "未命中A股有色金属映射行业。", limit=8
         ),
         "metal_theme_bars": render_rank_bars(
-            metal_items(snapshot)[1], "未命中金银铜/有色相关题材。", limit=8
+            metal_items(snapshot)[1], "未命中A股有色金属映射题材。", limit=8
+        ),
+        "metal_futures_detail_rows": render_metal_future_detail_rows(
+            metal_futures(snapshot)
         ),
         "metal_sector_detail_rows": render_sector_detail_rows(
-            metal_items(snapshot)[0], "未命中金银铜/有色相关行业。"
+            metal_items(snapshot)[0], "未命中A股有色金属映射行业。"
         ),
         "metal_theme_detail_rows": render_theme_detail_rows(
-            metal_items(snapshot)[1], "未命中金银铜/有色相关题材。"
+            metal_items(snapshot)[1], "未命中A股有色金属映射题材。"
         ),
         "data_quality_detail_items": render_data_quality_detail(snapshot, analysis),
         "market_structure": esc(analysis_value(analysis, "market_structure") or market_structure(snapshot)),

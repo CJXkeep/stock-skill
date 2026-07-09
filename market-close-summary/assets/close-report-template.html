@@ -770,16 +770,16 @@
         </section>
 
         <section>
-          <h2>金银铜与有色金属</h2>
+          <h2>金银铜期货与A股映射</h2>
           <p>{{metal_summary}}</p>
           <div class="two-col" style="margin-top:14px;">
             <div>
-              <div class="eyebrow">相关行业</div>
-              <div class="rank-list">{{metal_sector_bars}}</div>
+              <div class="eyebrow">期货主数据</div>
+              <div class="rank-list">{{metal_futures_bars}}</div>
             </div>
             <div>
-              <div class="eyebrow">相关题材</div>
-              <div class="rank-list">{{metal_theme_bars}}</div>
+              <div class="eyebrow">A股有色映射</div>
+              <div class="rank-list">{{metal_sector_bars}}</div>
             </div>
           </div>
         </section>
@@ -929,11 +929,27 @@
         <details>
           <summary>金银铜/有色金属明细</summary>
           <div class="detail-body">
-            <p class="detail-note">盘后侧展示A股行业和题材映射；外盘金银铜价格请结合盘前简报或商品行情源核对。</p>
+            <p class="detail-note">金属模块以金、银、铜期货行情为主数据；A股贵金属、工业金属、小金属等行业和题材仅作为映射验证。</p>
             <table>
               <thead>
                 <tr>
-                  <th>相关行业</th>
+                  <th>期货</th>
+                  <th>代码</th>
+                  <th>价格</th>
+                  <th>前收</th>
+                  <th>涨跌</th>
+                  <th>涨跌幅</th>
+                  <th>币种</th>
+                  <th>交易所</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{metal_futures_detail_rows}}</tbody>
+            </table>
+            <table style="margin-top:12px;">
+              <thead>
+                <tr>
+                  <th>A股映射行业</th>
                   <th>涨跌幅</th>
                   <th>成交/热度</th>
                   <th>上涨/下跌</th>
@@ -947,7 +963,7 @@
             <table style="margin-top:12px;">
               <thead>
                 <tr>
-                  <th>相关题材</th>
+                  <th>A股映射题材</th>
                   <th>涨跌幅</th>
                   <th>日期</th>
                   <th>代表</th>

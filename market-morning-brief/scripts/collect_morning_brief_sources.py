@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import sys
 import time
 import urllib.parse
@@ -111,14 +112,26 @@ def last_two(values: list[Any]) -> tuple[float | None, float | None]:
         if value is None:
             continue
         try:
-            numbers.append(float(value))
+            number = float(value)
         except (TypeError, ValueError):
             continue
+        if math.isfinite(number):
+            numbers.append(number)
     if not numbers:
         return None, None
     if len(numbers) == 1:
         return numbers[-1], None
     return numbers[-1], numbers[-2]
+
+
+def finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 def parse_quote(symbol_info: dict[str, str], chart: dict[str, Any]) -> dict[str, Any]:
@@ -127,13 +140,11 @@ def parse_quote(symbol_info: dict[str, str], chart: dict[str, Any]) -> dict[str,
     close, prior = last_two(quote.get("close") or [])
     price = meta.get("regularMarketPrice", close)
     previous = meta.get("chartPreviousClose", prior)
-    try:
-        price_float = float(price)
-    except (TypeError, ValueError):
+    price_float = finite_float(price)
+    if price_float is None:
         price_float = close
-    try:
-        previous_float = float(previous)
-    except (TypeError, ValueError):
+    previous_float = finite_float(previous)
+    if previous_float is None:
         previous_float = prior
 
     change = None
@@ -156,16 +167,15 @@ def parse_quote(symbol_info: dict[str, str], chart: dict[str, Any]) -> dict[str,
 
 
 def format_pct(value: Any) -> str:
-    try:
-        return f"{float(value):+.2f}%"
-    except (TypeError, ValueError):
+    number = finite_float(value)
+    if number is None:
         return "涨跌幅待确认"
+    return f"{number:+.2f}%"
 
 
 def direction_word(value: Any) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+    number = finite_float(value)
+    if number is None:
         return "待确认"
     if number > 0.15:
         return "上涨"
@@ -194,8 +204,8 @@ def collect_quotes(symbols: list[dict[str, str]], timeout: int, retries: int) ->
 
 def pct_by_symbol(quotes: list[dict[str, Any]], symbol: str) -> float | None:
     for quote in quotes:
-        if quote.get("symbol") == symbol and quote.get("pct") is not None:
-            return float(quote["pct"])
+        if quote.get("symbol") == symbol:
+            return finite_float(quote.get("pct"))
     return None
 
 
@@ -314,7 +324,7 @@ def build_brief(date: str, quotes: list[dict[str, Any]], errors: list[str]) -> d
         "date": date,
         "time_window": "上一交易日A股收盘后至今日开盘前",
         "retrieved_at": now_local(),
-        "sources": ["Yahoo Finance public chart endpoint"],
+        "sources": ["Yahoo Finance public chart endpoint"] if quotes else [],
         "overall_tone": tone,
         "one_sentence_overview": f"隔夜公开市场线索显示盘前环境暂定为{tone}，仍需用开盘强弱、成交额和主线扩散验证。",
         "global_markets": groups.get("global") or ["隔夜全球市场数据未能自动获取。"],
@@ -334,7 +344,7 @@ def build_brief(date: str, quotes: list[dict[str, Any]], errors: list[str]) -> d
         "risks": [
             "若隔夜利好方向开盘后快速回落，说明资金认可度不足。",
             "若人民币、港股和A股权重背离，降低对单一海外线索的解释权重。",
-            "自动价格源可能延迟，精确点位和重大政策仍需人工核验。",
+            "若政策或公告出现盘中超预期变化，需重新校准盘前假设。",
         ],
         "data_quality": data_quality,
         "raw_quotes": quotes,

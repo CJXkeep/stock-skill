@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = Path(__file__).resolve().parent
+REQUIRED_METAL_FUTURES = {
+    "GC=F": "COMEX黄金",
+    "SI=F": "COMEX白银",
+    "HG=F": "COMEX铜",
+}
 
 
 def today() -> str:
@@ -31,6 +37,10 @@ def read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def resolved(path: Path) -> Path:
+    return path if path.is_absolute() else ROOT / path
 
 
 def run(args: list[str]) -> None:
@@ -58,10 +68,31 @@ def missing_close_fields(snapshot: dict[str, Any]) -> list[str]:
     sectors = snapshot.get("sectors") or {}
     if not sectors.get("leading") and not sectors.get("lagging"):
         missing.append("sectors.leading/lagging")
-    metals = snapshot.get("metals") or {}
-    if not metals.get("sectors") and not metals.get("themes"):
-        missing.append("metals.sectors/themes")
+    missing.extend(missing_metal_futures(snapshot))
     return missing
+
+
+def missing_metal_futures(snapshot: dict[str, Any]) -> list[str]:
+    metals = snapshot.get("metals") or {}
+    rows = [item for item in metals.get("futures") or [] if isinstance(item, dict)]
+    by_symbol = {str(item.get("symbol") or ""): item for item in rows}
+    missing = []
+    for symbol in REQUIRED_METAL_FUTURES:
+        item = by_symbol.get(symbol)
+        if not item:
+            missing.append(f"metals.futures.{symbol}")
+            continue
+        if not all(number_like(item.get(key)) for key in ["price", "previous", "change_pct"]):
+            missing.append(f"metals.futures.{symbol}.price/previous/change_pct")
+    return missing
+
+
+def number_like(value: Any) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number)
 
 
 def fallback_queries(date: str, missing: list[str]) -> list[str]:
@@ -77,8 +108,8 @@ def fallback_queries(date: str, missing: list[str]) -> list[str]:
         queries.append(f"{full} A股 行业板块 涨幅 跌幅")
         queries.append(f"{full} 有色金属 贵金属 铜 A股 板块 表现")
     if any(item.startswith("metals") for item in missing):
-        queries.append(f"{full} A股 金银铜 有色金属 贵金属 工业金属 收盘")
-        queries.append(f"{full} 铜 贵金属 小金属 能源金属 A股 题材 板块")
+        queries.append(f"{full} COMEX 黄金 白银 铜 期货 收盘 涨跌幅")
+        queries.append(f"{full} 金银铜 期货 外盘 行情 黄金 白银 铜")
     if "indexes" in missing:
         queries.append(f"{full} 上证指数 深证成指 创业板指 收盘")
     return queries
@@ -99,6 +130,16 @@ def analysis_seed(path: Path, missing: list[str]) -> dict[str, Any]:
     seed.setdefault("tomorrow_observations", []).append("优先核对成交额、涨跌家数、涨跌停和行业榜单是否与权威行情源一致。")
     path.write_text(json.dumps(seed, ensure_ascii=False, indent=2), encoding="utf-8")
     return seed
+
+
+def structured_analysis_seed(path: Path, snapshot: dict[str, Any]) -> None:
+    seed = {
+        "data_mode": "结构化数据",
+        "sources": snapshot.get("sources") or [],
+        "source_note": "结构化行情字段通过可用源取得，未触发网页检索补足。",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(seed, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,6 +188,7 @@ def main() -> int:
 
     snapshot_data = read_json(ROOT / snapshot if not snapshot.is_absolute() else snapshot)
     missing = missing_close_fields(snapshot_data)
+    analysis_path = resolved(analysis)
 
     if missing:
         queries = fallback_queries(args.date, missing)
@@ -165,7 +207,7 @@ def main() -> int:
         for query in queries:
             command.extend(["--query", query])
         run(command)
-        analysis_seed(ROOT / analysis if not analysis.is_absolute() else analysis, missing)
+        analysis_seed(analysis_path, missing)
         run(
             [
                 sys.executable,
@@ -180,20 +222,8 @@ def main() -> int:
                 str(llm_context),
             ]
         )
-    elif not analysis.exists() and not (ROOT / analysis).exists():
-        analysis.parent.mkdir(parents=True, exist_ok=True)
-        analysis.write_text(
-            json.dumps(
-                {
-                    "data_mode": "结构化数据",
-                    "sources": snapshot_data.get("sources") or [],
-                    "source_note": "结构化行情字段通过可用源取得，未触发网页检索补足。",
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+    elif args.analysis is None:
+        structured_analysis_seed(analysis_path, snapshot_data)
 
     run(
         [

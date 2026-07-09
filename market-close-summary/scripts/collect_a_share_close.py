@@ -63,6 +63,11 @@ TENCENT_INDEX_SYMBOLS = dict(SINA_INDEX_SYMBOLS)
 
 CACHE_FILE_PREFIX = "a-share-close-"
 CACHE_FILE_SUFFIX = ".json"
+METAL_FUTURES_SYMBOLS = [
+    {"symbol": "GC=F", "name": "COMEX黄金", "area": "黄金"},
+    {"symbol": "SI=F", "name": "COMEX白银", "area": "白银"},
+    {"symbol": "HG=F", "name": "COMEX铜", "area": "铜"},
+]
 METAL_KEYWORDS = [
     "黄金",
     "白银",
@@ -193,7 +198,7 @@ def empty_snapshot(date: str) -> dict[str, Any]:
         "limit_stats": {},
         "sectors": {"leading": [], "lagging": []},
         "themes": {"active": [], "weak": []},
-        "metals": {"sectors": [], "themes": []},
+        "metals": {"futures": [], "sectors": [], "themes": []},
         "flows": {},
         "intraday_notes": [],
         "catalysts": [],
@@ -354,6 +359,89 @@ def collect_tencent_indexes(snapshot: dict[str, Any], timeout: int, retries: int
         raise ValueError("Tencent index endpoint returned no rows")
     snapshot["indexes"] = indexes
     add_source(snapshot, "Tencent")
+
+
+def yahoo_chart(symbol: str, timeout: int, retries: int) -> dict[str, Any]:
+    encoded = urllib.parse.quote(symbol, safe="")
+    last_error: Exception | None = None
+    for host in ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]:
+        url = f"https://{host}/v8/finance/chart/{encoded}?range=5d&interval=1d"
+        try:
+            payload = request_json(url, timeout, retries)
+            result = (payload.get("chart") or {}).get("result") or []
+            if result:
+                result[0].setdefault("_source_host", host)
+                return result[0]
+            error = (payload.get("chart") or {}).get("error")
+            last_error = RuntimeError(str(error or "empty Yahoo chart result"))
+        except Exception as exc:
+            last_error = exc
+    raise last_error or RuntimeError("empty Yahoo chart result")
+
+
+def last_two(values: list[Any]) -> tuple[float | None, float | None]:
+    numbers = []
+    for value in values:
+        if value is None:
+            continue
+        try:
+            numbers.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if not numbers:
+        return None, None
+    if len(numbers) == 1:
+        return numbers[-1], None
+    return numbers[-1], numbers[-2]
+
+
+def parse_yahoo_future(symbol_info: dict[str, str], chart: dict[str, Any]) -> dict[str, Any]:
+    meta = chart.get("meta") or {}
+    quote = (((chart.get("indicators") or {}).get("quote") or [{}])[0]) or {}
+    close, prior = last_two(quote.get("close") or [])
+    price = meta.get("regularMarketPrice", close)
+    previous = meta.get("chartPreviousClose", prior)
+    price_float = safe_float(price)
+    if price_float is None:
+        price_float = close
+    previous_float = safe_float(previous)
+    if previous_float is None:
+        previous_float = prior
+    change = None
+    change_pct = None
+    if price_float is not None and previous_float not in (None, 0):
+        change = price_float - previous_float
+        change_pct = change / previous_float * 100
+    return {
+        **symbol_info,
+        "price": price_float,
+        "previous": previous_float,
+        "change": change,
+        "change_pct": change_pct,
+        "currency": meta.get("currency"),
+        "exchange": meta.get("exchangeName") or meta.get("fullExchangeName"),
+        "source_time": meta.get("regularMarketTime"),
+        "source": chart.get("_source_host") or "Yahoo Finance chart endpoint",
+        "note": "Public delayed futures quote; use as commodity direction context.",
+    }
+
+
+def collect_yahoo_metal_futures(snapshot: dict[str, Any], timeout: int, retries: int) -> None:
+    metals = snapshot.setdefault("metals", {"futures": [], "sectors": [], "themes": []})
+    if metals.get("futures"):
+        return
+    quotes = []
+    errors = []
+    for symbol_info in METAL_FUTURES_SYMBOLS:
+        try:
+            quotes.append(parse_yahoo_future(symbol_info, yahoo_chart(symbol_info["symbol"], timeout, retries)))
+        except Exception as exc:
+            errors.append(f"{symbol_info['name']}({symbol_info['symbol']}): {exc}")
+    if quotes:
+        metals["futures"] = quotes
+        add_source(snapshot, "Yahoo Finance public chart endpoint")
+    if errors:
+        add_error(snapshot, "Yahoo metal futures", RuntimeError("; ".join(errors)))
 
 
 def collect_eastmoney_a_stock_breadth(
@@ -519,7 +607,7 @@ def collect_eastmoney_boards(
     if wrote:
         add_source(snapshot, "Eastmoney")
     if metal_rows:
-        target_metals = snapshot.setdefault("metals", {"sectors": [], "themes": []})
+        target_metals = snapshot.setdefault("metals", {"futures": [], "sectors": [], "themes": []})
         metal_key = "sectors" if target_key == "sectors" else "themes"
         existing_names = {item.get("name") for item in target_metals.get(metal_key, [])}
         for item in metal_rows:
@@ -670,7 +758,7 @@ def collect_akshare_ths_industry_summary(snapshot: dict[str, Any], ak: Any) -> b
 
     snapshot["sectors"]["leading"] = [item(row) for row in ordered[:10]]
     snapshot["sectors"]["lagging"] = [item(row) for row in ordered[-10:][::-1]]
-    snapshot.setdefault("metals", {"sectors": [], "themes": []})["sectors"] = [
+    snapshot.setdefault("metals", {"futures": [], "sectors": [], "themes": []})["sectors"] = [
         item(row) for row in ordered if is_metal_name(first_existing(row, ["板块", "板块名称", "名称", "name"]))
     ][:12]
 
@@ -779,7 +867,7 @@ def collect_akshare_ths_industry_index_history(snapshot: dict[str, Any], ak: Any
     snapshot["sectors"]["lagging"] = ordered[-10:][::-1]
     metals = [item for item in ordered if is_metal_name(item.get("name"))]
     if metals:
-        snapshot.setdefault("metals", {"sectors": [], "themes": []})["sectors"] = metals[:12]
+        snapshot.setdefault("metals", {"futures": [], "sectors": [], "themes": []})["sectors"] = metals[:12]
     if failed:
         add_error(snapshot, "AkShare THS industry index history", RuntimeError(f"{failed} industry index calls failed"))
     return True
@@ -822,7 +910,7 @@ def collect_akshare_ths_concept_summary(snapshot: dict[str, Any], ak: Any) -> bo
         return False
     snapshot["themes"]["active"] = items
     if metal_items:
-        snapshot.setdefault("metals", {"sectors": [], "themes": []})["themes"] = metal_items[:12]
+        snapshot.setdefault("metals", {"futures": [], "sectors": [], "themes": []})["themes"] = metal_items[:12]
     return True
 
 
@@ -869,7 +957,7 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
                     }
                     for r in ordered[-10:][::-1]
                 ]
-                if not snapshot.setdefault("metals", {"sectors": [], "themes": []})["sectors"]:
+                if not snapshot.setdefault("metals", {"futures": [], "sectors": [], "themes": []})["sectors"]:
                     snapshot["metals"]["sectors"] = [
                         {
                             "name": first_existing(r, ["板块名称", "名称"]),
@@ -918,7 +1006,7 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
                     }
                     for r in ordered[-10:][::-1]
                 ]
-                if not snapshot.setdefault("metals", {"sectors": [], "themes": []})["themes"]:
+                if not snapshot.setdefault("metals", {"futures": [], "sectors": [], "themes": []})["themes"]:
                     snapshot["metals"]["themes"] = [
                         {
                             "name": first_existing(r, ["板块名称", "名称"]),
@@ -1118,6 +1206,10 @@ def main() -> int:
         (
             "Eastmoney indexes",
             lambda: collect_eastmoney_indexes(snapshot, args.timeout, args.retries),
+        ),
+        (
+            "Yahoo metal futures",
+            lambda: collect_yahoo_metal_futures(snapshot, args.timeout, args.retries),
         ),
         (
             "Eastmoney A-share breadth",

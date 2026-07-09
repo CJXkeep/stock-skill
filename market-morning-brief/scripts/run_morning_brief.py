@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = Path(__file__).resolve().parent
 CLOSE_SCRIPT_DIR = ROOT / "market-close-summary" / "scripts"
+REQUIRED_METAL_FUTURES = {
+    "GC=F": "COMEX黄金",
+    "SI=F": "COMEX白银",
+    "HG=F": "COMEX铜",
+}
 
 
 def today() -> str:
@@ -59,7 +65,7 @@ def as_list(value: Any) -> list[Any]:
 
 
 def missing_morning_fields(brief: dict[str, Any]) -> list[str]:
-    quotes = [item for item in as_list(brief.get("raw_quotes")) if isinstance(item, dict)]
+    quotes = valid_quotes(brief)
     missing: list[str] = []
     if len(quotes) < 3:
         missing.append("raw_quotes.min3")
@@ -69,6 +75,7 @@ def missing_morning_fields(brief: dict[str, Any]) -> list[str]:
         missing.append("fx_rate_quotes")
     if not any(item.get("bucket") == "commodities" for item in quotes):
         missing.append("commodity_quotes")
+    missing.extend(missing_metal_futures(brief))
     if not brief.get("impact_paths"):
         missing.append("impact_paths")
     if only_placeholder(brief.get("macro_policy")):
@@ -77,6 +84,41 @@ def missing_morning_fields(brief: dict[str, Any]) -> list[str]:
         missing.append("industry_catalysts")
     if only_placeholder(brief.get("company_signals")):
         missing.append("company_signals")
+    return missing
+
+
+def valid_quotes(brief: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in as_list(brief.get("raw_quotes"))
+        if isinstance(item, dict) and usable_quote(item)
+    ]
+
+
+def usable_quote(item: dict[str, Any]) -> bool:
+    return bool(item.get("symbol")) and all(
+        number_like(item.get(key)) for key in ["price", "previous", "pct"]
+    )
+
+
+def number_like(value: Any) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number)
+
+
+def missing_metal_futures(brief: dict[str, Any]) -> list[str]:
+    by_symbol = {str(item.get("symbol") or ""): item for item in valid_quotes(brief)}
+    missing = []
+    for symbol in REQUIRED_METAL_FUTURES:
+        item = by_symbol.get(symbol)
+        if not item:
+            missing.append(f"raw_quotes.{symbol}")
+            continue
+        if not all(number_like(item.get(key)) for key in ["price", "previous", "pct"]):
+            missing.append(f"raw_quotes.{symbol}.price/previous/pct")
     return missing
 
 
@@ -100,7 +142,9 @@ def fallback_queries(date: str, missing: list[str]) -> list[str]:
         queries.append(f"global_market::{full} 盘前 隔夜 美股 纳指 费城半导体 港股 中概")
     if any(item in missing for item in ["fx_rate_quotes", "impact_paths"]):
         queries.append(f"fx_rates::{full} 盘前 人民币 汇率 美债收益率 A股")
-    if any(item in missing for item in ["commodity_quotes", "industry_catalysts", "impact_paths"]):
+    if any(item.startswith(("raw_quotes.GC=F", "raw_quotes.SI=F", "raw_quotes.HG=F")) for item in missing):
+        queries.append(f"commodities::{full} 盘前 COMEX 黄金 白银 铜 期货 涨跌幅")
+    elif any(item in missing for item in ["commodity_quotes", "industry_catalysts", "impact_paths"]):
         queries.append(f"commodities::{full} 盘前 黄金 白银 铜 原油 外盘 期货 A股 有色金属")
     if "macro_policy" in missing:
         queries.append(f"macro_policy::{full} 盘前 政策 央行 证监会 发改委 财政部 A股")
@@ -140,7 +184,8 @@ def lines_for(evidence: dict[str, Any], purposes: set[str], limit: int) -> list[
 
 
 def merge_evidence(brief: dict[str, Any], evidence: dict[str, Any], missing: list[str]) -> dict[str, Any]:
-    sources = list(dict.fromkeys(as_list(brief.get("sources")) + as_list((evidence.get("analysis_seed") or {}).get("sources"))))
+    evidence_sources = as_list((evidence.get("analysis_seed") or {}).get("sources")) if evidence.get("results") else []
+    sources = list(dict.fromkeys(as_list(brief.get("sources")) + evidence_sources))
     if sources:
         brief["sources"] = sources
 
@@ -172,7 +217,30 @@ def merge_evidence(brief: dict[str, Any], evidence: dict[str, Any], missing: lis
     if evidence.get("errors"):
         quality.append("网页检索错误：" + "; ".join(str(item.get("message")) for item in evidence.get("errors", [])[:3]))
     brief["data_quality"] = quality
+    normalize_push_sections(brief)
     return brief
+
+
+def normalize_push_sections(brief: dict[str, Any]) -> None:
+    if only_placeholder(brief.get("macro_policy")):
+        brief["macro_policy"] = [
+            "盘前未捕捉到可直接改变A股开盘假设的新增宏观或监管线索，先以隔夜风险资产、人民币、利率和商品价格验证风险偏好。"
+        ]
+    if only_placeholder(brief.get("company_signals")):
+        brief["company_signals"] = [
+            "盘前未捕捉到具备全市场外溢影响的公司公告线索，个股公告仍以交易所和CNINFO为准。"
+        ]
+    risks = [
+        item
+        for item in as_list(brief.get("risks"))
+        if "价格源" not in str(item) and "人工核验" not in str(item)
+    ]
+    if not risks:
+        risks = [
+            "若隔夜利好方向开盘后快速回落，说明资金认可度不足。",
+            "若人民币、港股和A股权重背离，降低对单一海外线索的解释权重。",
+        ]
+    brief["risks"] = risks
 
 
 def parse_args() -> argparse.Namespace:
@@ -227,6 +295,9 @@ def main() -> int:
         run(command)
         evidence = read_json(web_evidence)
         brief_data = merge_evidence(brief_data, evidence, missing)
+        write_json(brief, brief_data)
+    else:
+        normalize_push_sections(brief_data)
         write_json(brief, brief_data)
 
     run(
