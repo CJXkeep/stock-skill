@@ -13,6 +13,17 @@ from typing import Any
 
 
 PLACEHOLDER_RE = re.compile(r"{{([a-zA-Z0-9_]+)}}")
+METAL_KEYWORDS = [
+    "黄金",
+    "白银",
+    "铜",
+    "有色",
+    "贵金属",
+    "工业金属",
+    "小金属",
+    "能源金属",
+    "金属新材料",
+]
 
 
 def validate_date(value: str) -> str:
@@ -73,6 +84,21 @@ def format_amount_cny(value: Any) -> str:
     if abs(number) >= 100_000_000:
         return f"{number / 100_000_000:,.0f} 亿"
     return f"{number:,.0f}"
+
+
+def change_value(item: dict[str, Any]) -> Any:
+    value = item.get("change_pct")
+    if value is None:
+        value = item.get("pct")
+    return value
+
+
+def is_metal_item(item: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ["name", "driver_event", "leader"]
+    )
+    return any(keyword in text for keyword in METAL_KEYWORDS)
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -276,7 +302,7 @@ def leading_names(items: list[dict[str, Any]], limit: int = 5) -> list[str]:
     names = []
     for item in items[:limit]:
         name = item.get("name")
-        pct = item.get("change_pct")
+        pct = change_value(item)
         if name:
             pct_text = format_pct(pct)
             names.append(f"{name} {pct_text}" if pct_text != "-" else str(name))
@@ -410,7 +436,7 @@ def render_rank_bars(items: list[dict[str, Any]], empty_text: str, limit: int = 
     parsed = []
     for item in items[:limit]:
         try:
-            change = float(item.get("change_pct"))
+            change = float(change_value(item))
         except (TypeError, ValueError):
             continue
         parsed.append((item, change))
@@ -444,6 +470,113 @@ def render_rank_bars(items: list[dict[str, Any]], empty_text: str, limit: int = 
             "</div></div>"
         )
     return "\n".join(rows)
+
+
+def render_index_detail_rows(snapshot: dict[str, Any]) -> str:
+    rows = []
+    for item in snapshot.get("indexes", []):
+        change = item.get("change")
+        pct = item.get("change_pct")
+        rows.append(
+            "<tr>"
+            f"<td>{esc(item.get('name'))}</td>"
+            f"<td>{esc(item.get('code'))}</td>"
+            f"<td>{esc(format_number(item.get('close')))}</td>"
+            f"<td class=\"{pct_class(change)}\">{esc(format_number(change))}</td>"
+            f"<td class=\"{pct_class(pct)}\">{esc(format_pct(pct))}</td>"
+            f"<td>{esc(format_number(item.get('volume'), 0))}</td>"
+            f"<td>{esc(format_number(item.get('amount'), 0))}</td>"
+            f"<td>{esc(item.get('source'))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return '<tr><td colspan="8">指数明细缺失。</td></tr>'
+    return "\n".join(rows)
+
+
+def render_sector_detail_rows(items: list[dict[str, Any]], empty_text: str, limit: int = 20) -> str:
+    rows = []
+    for item in items[:limit]:
+        change = change_value(item)
+        up_down = "-"
+        if item.get("rising_count") is not None or item.get("falling_count") is not None:
+            up_down = f"{format_int(item.get('rising_count'))}/{format_int(item.get('falling_count'))}"
+        rows.append(
+            "<tr>"
+            f"<td>{esc(item.get('name'))}</td>"
+            f"<td class=\"{pct_class(change)}\">{esc(format_pct(change))}</td>"
+            f"<td>{esc(format_number(item.get('amount')))}</td>"
+            f"<td>{esc(up_down)}</td>"
+            f"<td>{esc(item.get('leader'))}</td>"
+            f"<td class=\"{pct_class(item.get('leader_change_pct'))}\">{esc(format_pct(item.get('leader_change_pct')))}</td>"
+            f"<td>{esc(item.get('source'))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return f'<tr><td colspan="7">{esc(empty_text)}</td></tr>'
+    return "\n".join(rows)
+
+
+def render_theme_detail_rows(items: list[dict[str, Any]], empty_text: str, limit: int = 20) -> str:
+    rows = []
+    for item in items[:limit]:
+        change = change_value(item)
+        size = item.get("constituent_count")
+        if size is None:
+            size = item.get("turnover_rate")
+        rows.append(
+            "<tr>"
+            f"<td>{esc(item.get('name'))}</td>"
+            f"<td class=\"{pct_class(change)}\">{esc(format_pct(change))}</td>"
+            f"<td>{esc(item.get('date'))}</td>"
+            f"<td>{esc(item.get('leader'))}</td>"
+            f"<td>{esc(size)}</td>"
+            f"<td>{esc(truncate(item.get('driver_event'), 120))}</td>"
+            f"<td>{esc(item.get('source'))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return f'<tr><td colspan="7">{esc(empty_text)}</td></tr>'
+    return "\n".join(rows)
+
+
+def metal_items(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    metals = snapshot.get("metals") or {}
+    sectors = [item for item in as_list(metals.get("sectors")) if isinstance(item, dict)]
+    themes = [item for item in as_list(metals.get("themes")) if isinstance(item, dict)]
+    if not sectors:
+        sector_source = []
+        sector_source.extend((snapshot.get("sectors") or {}).get("leading", []))
+        sector_source.extend((snapshot.get("sectors") or {}).get("lagging", []))
+        sectors = [item for item in sector_source if isinstance(item, dict) and is_metal_item(item)]
+    if not themes:
+        theme_source = []
+        theme_source.extend((snapshot.get("themes") or {}).get("active", []))
+        theme_source.extend((snapshot.get("themes") or {}).get("weak", []))
+        themes = [item for item in theme_source if isinstance(item, dict) and is_metal_item(item)]
+    return sectors[:12], themes[:12]
+
+
+def metal_summary(snapshot: dict[str, Any]) -> str:
+    sectors, themes = metal_items(snapshot)
+    parts = []
+    sector_names = leading_names(sectors, 5)
+    theme_names = leading_names(themes, 5)
+    if sector_names:
+        parts.append("相关行业：" + "、".join(sector_names))
+    if theme_names:
+        parts.append("相关题材：" + "、".join(theme_names))
+    if not parts:
+        return "本次结构化快照未命中金银铜/有色金属相关行业或题材，需结合商品期货和行业页面进一步核对。"
+    return "；".join(parts) + "。"
+
+
+def render_data_quality_detail(snapshot: dict[str, Any], analysis: dict[str, Any]) -> str:
+    items = data_quality_items(snapshot)
+    source = source_note(snapshot, analysis)
+    if source:
+        items.insert(0, source)
+    return list_items(items, "暂无额外数据质量说明。")
 
 
 def turnover_text(snapshot: dict[str, Any]) -> tuple[str, str]:
@@ -567,18 +700,45 @@ def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[st
         "breadth_chart": render_breadth_chart(snapshot),
         "index_change_bars": render_index_change_bars(snapshot),
         "sector_leader_bars": render_rank_bars(
-            (snapshot.get("sectors") or {}).get("leading", []), "行业领涨数据缺失。"
+            (snapshot.get("sectors") or {}).get("leading", []), "行业领涨数据缺失。", limit=8
         ),
         "sector_lagger_bars": render_rank_bars(
-            (snapshot.get("sectors") or {}).get("lagging", []), "行业领跌数据缺失。"
+            (snapshot.get("sectors") or {}).get("lagging", []), "行业领跌数据缺失。", limit=8
         ),
         "theme_leader_bars": render_rank_bars(
-            (snapshot.get("themes") or {}).get("active", []), "活跃题材数据缺失。"
+            (snapshot.get("themes") or {}).get("active", []), "活跃题材数据缺失。", limit=8
         ),
         "theme_lagger_bars": render_rank_bars(
-            (snapshot.get("themes") or {}).get("weak", []), "弱势题材数据缺失。"
+            (snapshot.get("themes") or {}).get("weak", []), "弱势题材数据缺失。", limit=8
         ),
         "index_rows": render_index_rows(snapshot),
+        "index_detail_rows": render_index_detail_rows(snapshot),
+        "sector_leader_detail_rows": render_sector_detail_rows(
+            (snapshot.get("sectors") or {}).get("leading", []), "行业领涨明细缺失。"
+        ),
+        "sector_lagger_detail_rows": render_sector_detail_rows(
+            (snapshot.get("sectors") or {}).get("lagging", []), "行业领跌明细缺失。"
+        ),
+        "theme_leader_detail_rows": render_theme_detail_rows(
+            (snapshot.get("themes") or {}).get("active", []), "活跃题材明细缺失。"
+        ),
+        "theme_lagger_detail_rows": render_theme_detail_rows(
+            (snapshot.get("themes") or {}).get("weak", []), "弱势题材明细缺失。"
+        ),
+        "metal_summary": esc(metal_summary(snapshot)),
+        "metal_sector_bars": render_rank_bars(
+            metal_items(snapshot)[0], "未命中金银铜/有色相关行业。", limit=8
+        ),
+        "metal_theme_bars": render_rank_bars(
+            metal_items(snapshot)[1], "未命中金银铜/有色相关题材。", limit=8
+        ),
+        "metal_sector_detail_rows": render_sector_detail_rows(
+            metal_items(snapshot)[0], "未命中金银铜/有色相关行业。"
+        ),
+        "metal_theme_detail_rows": render_theme_detail_rows(
+            metal_items(snapshot)[1], "未命中金银铜/有色相关题材。"
+        ),
+        "data_quality_detail_items": render_data_quality_detail(snapshot, analysis),
         "market_structure": esc(analysis_value(analysis, "market_structure") or market_structure(snapshot)),
         "theme_tags": render_theme_tags(snapshot),
         "theme_commentary": esc(analysis_value(analysis, "theme_commentary") or theme_commentary(snapshot)),

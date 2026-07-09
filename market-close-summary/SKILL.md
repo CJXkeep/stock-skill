@@ -30,7 +30,7 @@ When neither structured collection nor browsing/search is available, tell the us
 
 When using free sources or web search, record source names and retrieval time in the review if possible. Cross-check major index values, turnover, and breadth when a source looks stale or inconsistent. If only narrative sources are available, mark the output as `搜索补足` or `数据不足` and avoid hard numeric conclusions.
 
-For automated collection, use `scripts/collect_a_share_close.py`. It produces a normalized JSON snapshot from optional AkShare, Tencent/Sina lightweight quotes, Eastmoney public endpoints, and same-family public board data where available. Treat its output as a starting point and still apply the cross-check rules in [references/free-data-sources.md](references/free-data-sources.md). If the snapshot is incomplete, supplement it with the web-research fallback instead of stopping immediately.
+For the normal automated path, use `scripts/run_close_review.py`. It runs structured collection first, checks the usability gate, and starts targeted web-research fallback when fields are missing or partial. Use `scripts/collect_a_share_close.py` only when you need the raw normalized JSON snapshot from optional AkShare, Tencent/Sina lightweight quotes, Eastmoney public endpoints, and same-family public board data where available.
 
 ## Workflow
 
@@ -85,7 +85,8 @@ Use [references/free-data-sources.md](references/free-data-sources.md) when data
 Use [references/web-research-fallback.md](references/web-research-fallback.md) when structured data is missing, public APIs fail, or the user asks to search the web and let the LLM organize the narrative.
 Use [references/report-format.md](references/report-format.md) when choosing Markdown versus HTML, changing analysis dimensions, or producing a fixed-format report.
 Use [references/platform-integration.md](references/platform-integration.md) when adapting this skill to OpenClaw, Hermens, or another non-Codex agent runtime.
-Use `scripts/collect_a_share_close.py --date YYYY-MM-DD` when the user wants to collect free-source data before writing the review.
+Use `scripts/run_close_review.py --date YYYY-MM-DD` when the user wants the normal automated close review with fallback channels.
+Use `scripts/collect_a_share_close.py --date YYYY-MM-DD` when the user wants only to collect free-source data before writing the review.
 Use `scripts/collect_web_research_fallback.py --date YYYY-MM-DD` when structured collection fails or the user asks to search public web information before writing the review.
 Use `scripts/prepare_llm_analysis_context.py --snapshot data/a-share-close-YYYY-MM-DD.json --web-evidence data/a-share-close-web-YYYY-MM-DD.json` when the LLM needs a compact, source-aware writing context for `analysis.json`.
 Use `scripts/render_close_report.py <snapshot.json>` to render the snapshot and optional analysis JSON into a fixed HTML report.

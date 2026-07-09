@@ -26,7 +26,7 @@ Prioritize inputs in this order:
 
 When live news access is unavailable, ask the user to paste headlines or use the paste-in template in [references/morning-brief-framework.md](references/morning-brief-framework.md).
 
-For a first-pass public-market-data seed, run `scripts/collect_morning_brief_sources.py --date YYYY-MM-DD`. It generates a conservative `brief.json` from delayed/free global index, FX/rate, and commodity clues. Treat it as market context, then add official policy, announcements, and media-sourced catalysts before making strong claims.
+For the daily automated path, run `scripts/run_morning_brief.py --date YYYY-MM-DD`. It generates a conservative `brief.json` from delayed/free global index, FX/rate, and commodity clues, then starts targeted public web-evidence fallback when policy, industry, company, commodity, or impact-path fields are missing. Treat search evidence as context, not verified market prices.
 
 ## Workflow
 
@@ -69,7 +69,8 @@ For browser viewing, screenshots, or repeated daily archives, use [assets/mornin
 Use [references/morning-brief-framework.md](references/morning-brief-framework.md) when a full workflow, paste-in template, or Markdown format is needed.
 Use [references/free-news-sources.md](references/free-news-sources.md) when source choice, evidence quality, or free data limitations matter.
 Use [references/platform-integration.md](references/platform-integration.md) when adapting this skill to OpenClaw, Hermens, or another non-Codex agent runtime.
-Use `scripts/collect_morning_brief_sources.py --date YYYY-MM-DD` when the user wants a quick pre-market source seed before writing the brief.
+Use `scripts/run_morning_brief.py --date YYYY-MM-DD` when the user wants the normal automated pre-market brief with fallback channels.
+Use `scripts/collect_morning_brief_sources.py --date YYYY-MM-DD` when the user wants only a quick public-market-data seed before writing the brief.
 
 ## Guardrails
 

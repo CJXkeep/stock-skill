@@ -14,8 +14,10 @@ PYTHON_SCRIPTS = [
     "market-close-summary/scripts/collect_a_share_close.py",
     "market-close-summary/scripts/collect_web_research_fallback.py",
     "market-close-summary/scripts/prepare_llm_analysis_context.py",
+    "market-close-summary/scripts/run_close_review.py",
     "market-close-summary/scripts/render_close_report.py",
     "market-morning-brief/scripts/collect_morning_brief_sources.py",
+    "market-morning-brief/scripts/run_morning_brief.py",
     "market-morning-brief/scripts/render_morning_brief.py",
 ]
 

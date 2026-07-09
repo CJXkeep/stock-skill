@@ -63,6 +63,17 @@ TENCENT_INDEX_SYMBOLS = dict(SINA_INDEX_SYMBOLS)
 
 CACHE_FILE_PREFIX = "a-share-close-"
 CACHE_FILE_SUFFIX = ".json"
+METAL_KEYWORDS = [
+    "黄金",
+    "白银",
+    "铜",
+    "有色",
+    "贵金属",
+    "工业金属",
+    "小金属",
+    "能源金属",
+    "金属新材料",
+]
 
 
 def now_local() -> str:
@@ -182,6 +193,7 @@ def empty_snapshot(date: str) -> dict[str, Any]:
         "limit_stats": {},
         "sectors": {"leading": [], "lagging": []},
         "themes": {"active": [], "weak": []},
+        "metals": {"sectors": [], "themes": []},
         "flows": {},
         "intraday_notes": [],
         "catalysts": [],
@@ -446,6 +458,11 @@ def board_item(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def is_metal_name(value: Any) -> bool:
+    text = "" if value is None else str(value)
+    return any(keyword in text for keyword in METAL_KEYWORDS)
+
+
 def collect_eastmoney_boards(
     snapshot: dict[str, Any],
     timeout: int,
@@ -454,9 +471,10 @@ def collect_eastmoney_boards(
     target_key: str,
 ) -> None:
     fs = "m:90+t:2" if board_type == "industry" else "m:90+t:3"
+    page_size = 100 if board_type == "industry" else 200
     data = eastmoney_clist(
         page=1,
-        page_size=20,
+        page_size=page_size,
         sort_field="f3",
         sort_order=1,
         fs=fs,
@@ -466,10 +484,11 @@ def collect_eastmoney_boards(
     )
     rows = ((data.get("data") or {}).get("diff") or [])
     leading = [board_item(row) for row in rows[:10]]
+    metal_rows = [board_item(row) for row in rows if is_metal_name(row.get("f14"))]
 
     lag_data = eastmoney_clist(
         page=1,
-        page_size=10,
+        page_size=page_size,
         sort_field="f3",
         sort_order=0,
         fs=fs,
@@ -479,6 +498,7 @@ def collect_eastmoney_boards(
     )
     lag_rows = ((lag_data.get("data") or {}).get("diff") or [])
     weak = [board_item(row) for row in lag_rows[:10]]
+    metal_rows.extend(board_item(row) for row in lag_rows if is_metal_name(row.get("f14")))
 
     target = snapshot[target_key]
     wrote = False
@@ -498,6 +518,14 @@ def collect_eastmoney_boards(
             wrote = True
     if wrote:
         add_source(snapshot, "Eastmoney")
+    if metal_rows:
+        target_metals = snapshot.setdefault("metals", {"sectors": [], "themes": []})
+        metal_key = "sectors" if target_key == "sectors" else "themes"
+        existing_names = {item.get("name") for item in target_metals.get(metal_key, [])}
+        for item in metal_rows:
+            if item.get("name") not in existing_names:
+                target_metals[metal_key].append(item)
+                existing_names.add(item.get("name"))
 
 
 def df_records(df: Any) -> list[dict[str, Any]]:
@@ -642,6 +670,9 @@ def collect_akshare_ths_industry_summary(snapshot: dict[str, Any], ak: Any) -> b
 
     snapshot["sectors"]["leading"] = [item(row) for row in ordered[:10]]
     snapshot["sectors"]["lagging"] = [item(row) for row in ordered[-10:][::-1]]
+    snapshot.setdefault("metals", {"sectors": [], "themes": []})["sectors"] = [
+        item(row) for row in ordered if is_metal_name(first_existing(row, ["板块", "板块名称", "名称", "name"]))
+    ][:12]
 
     if not snapshot.get("breadth"):
         rising_total = 0.0
@@ -686,12 +717,95 @@ def collect_akshare_ths_industry_summary(snapshot: dict[str, Any], ak: Any) -> b
     return True
 
 
+def collect_akshare_ths_industry_index_history(snapshot: dict[str, Any], ak: Any, date: str) -> bool:
+    if (snapshot.get("sectors") or {}).get("leading") or not hasattr(ak, "stock_board_industry_index_ths"):
+        return False
+    if not hasattr(ak, "stock_board_industry_name_ths"):
+        return False
+
+    names = df_records(quiet_call(ak.stock_board_industry_name_ths))
+    if not names:
+        return False
+
+    end = yyyymmdd(date)
+    start = (dt.date.fromisoformat(date) - dt.timedelta(days=14)).strftime("%Y%m%d")
+    items: list[dict[str, Any]] = []
+    failed = 0
+    for row in names:
+        name = first_existing(row, ["name", "名称", "板块", "板块名称"])
+        if not name:
+            continue
+        try:
+            hist = df_records(
+                quiet_call(
+                    lambda name=name: ak.stock_board_industry_index_ths(
+                        symbol=str(name),
+                        start_date=start,
+                        end_date=end,
+                    )
+                )
+            )
+        except Exception:
+            failed += 1
+            continue
+        if len(hist) < 2:
+            continue
+        latest = hist[-1]
+        previous = hist[-2]
+        close = safe_float(first_existing(latest, ["收盘价", "close"]))
+        prev_close = safe_float(first_existing(previous, ["收盘价", "close"]))
+        if close is None or prev_close in (None, 0):
+            continue
+        change_pct = (close - prev_close) / prev_close * 100
+        items.append(
+            {
+                "name": str(name),
+                "change_pct": change_pct,
+                "amount": safe_float(first_existing(latest, ["成交额", "amount"])),
+                "volume": safe_float(first_existing(latest, ["成交量", "volume"])),
+                "close": close,
+                "previous_close": prev_close,
+                "source": "AkShare/同花顺 stock_board_industry_index_ths",
+            }
+        )
+
+    if not items:
+        if failed:
+            add_error(snapshot, "AkShare THS industry index history", RuntimeError(f"{failed} industry index calls failed"))
+        return False
+
+    ordered = sorted(items, key=lambda item: item.get("change_pct") or 0, reverse=True)
+    snapshot["sectors"]["leading"] = ordered[:10]
+    snapshot["sectors"]["lagging"] = ordered[-10:][::-1]
+    metals = [item for item in ordered if is_metal_name(item.get("name"))]
+    if metals:
+        snapshot.setdefault("metals", {"sectors": [], "themes": []})["sectors"] = metals[:12]
+    if failed:
+        add_error(snapshot, "AkShare THS industry index history", RuntimeError(f"{failed} industry index calls failed"))
+    return True
+
+
 def collect_akshare_ths_concept_summary(snapshot: dict[str, Any], ak: Any) -> bool:
     if (snapshot.get("themes") or {}).get("active") or not hasattr(ak, "stock_board_concept_summary_ths"):
         return False
     rows = df_records(quiet_call(ak.stock_board_concept_summary_ths))
     if not rows:
         return False
+    metal_items = []
+    for row in rows:
+        name = first_existing(row, ["概念名称", "板块名称", "名称", "name"])
+        event = first_existing(row, ["驱动事件"])
+        if is_metal_name(name) or is_metal_name(event):
+            metal_items.append(
+                {
+                    "name": name,
+                    "date": first_existing(row, ["日期"]),
+                    "driver_event": event,
+                    "leader": first_existing(row, ["龙头股"]),
+                    "constituent_count": safe_float(first_existing(row, ["成分股数量"])),
+                    "source": "AkShare/同花顺 stock_board_concept_summary_ths",
+                }
+            )
     items = []
     for row in rows[:12]:
         items.append(
@@ -707,6 +821,8 @@ def collect_akshare_ths_concept_summary(snapshot: dict[str, Any], ak: Any) -> bo
     if not items:
         return False
     snapshot["themes"]["active"] = items
+    if metal_items:
+        snapshot.setdefault("metals", {"sectors": [], "themes": []})["themes"] = metal_items[:12]
     return True
 
 
@@ -753,6 +869,16 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
                     }
                     for r in ordered[-10:][::-1]
                 ]
+                if not snapshot.setdefault("metals", {"sectors": [], "themes": []})["sectors"]:
+                    snapshot["metals"]["sectors"] = [
+                        {
+                            "name": first_existing(r, ["板块名称", "名称"]),
+                            "change_pct": safe_float(first_existing(r, ["涨跌幅", "涨跌幅%"])),
+                            "source": "AkShare/Eastmoney",
+                        }
+                        for r in ordered
+                        if is_metal_name(first_existing(r, ["板块名称", "名称"]))
+                    ][:12]
                 wrote = True
     except Exception as exc:
         add_error(snapshot, "AkShare industry boards", exc)
@@ -761,6 +887,11 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
         wrote = collect_akshare_ths_industry_summary(snapshot, ak) or wrote
     except Exception as exc:
         add_error(snapshot, "AkShare THS industry summary", exc)
+
+    try:
+        wrote = collect_akshare_ths_industry_index_history(snapshot, ak, date) or wrote
+    except Exception as exc:
+        add_error(snapshot, "AkShare THS industry index history", exc)
 
     try:
         if hasattr(ak, "stock_board_concept_name_em"):
@@ -787,6 +918,16 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
                     }
                     for r in ordered[-10:][::-1]
                 ]
+                if not snapshot.setdefault("metals", {"sectors": [], "themes": []})["themes"]:
+                    snapshot["metals"]["themes"] = [
+                        {
+                            "name": first_existing(r, ["板块名称", "名称"]),
+                            "change_pct": safe_float(first_existing(r, ["涨跌幅", "涨跌幅%"])),
+                            "source": "AkShare/Eastmoney",
+                        }
+                        for r in ordered
+                        if is_metal_name(first_existing(r, ["板块名称", "名称"]))
+                    ][:12]
                 wrote = True
     except Exception as exc:
         add_error(snapshot, "AkShare concept boards", exc)

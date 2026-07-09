@@ -116,6 +116,16 @@ def default_queries(date: str) -> list[dict[str, str]]:
     ]
 
 
+def query_item_from_arg(value: str) -> dict[str, str]:
+    if "::" in value:
+        purpose, query = value.split("::", 1)
+        purpose = purpose.strip() or "custom"
+        query = query.strip()
+        if query:
+            return {"purpose": purpose, "query": query}
+    return {"purpose": "custom", "query": value}
+
+
 def request_text(url: str, timeout: int, retries: int) -> str:
     last_error: Exception | None = None
     for attempt in range(retries + 1):
@@ -285,7 +295,12 @@ def parse_args() -> argparse.Namespace:
         "--query",
         action="append",
         default=[],
-        help="Additional search query. Can be passed multiple times.",
+        help="Additional search query. Can be passed multiple times. Use purpose::query to tag results.",
+    )
+    parser.add_argument(
+        "--no-default-queries",
+        action="store_true",
+        help="Use only explicitly supplied --query values.",
     )
     parser.add_argument("--max-results", type=positive_int, default=5, help="Results per query.")
     parser.add_argument("--timeout", type=positive_int, default=12, help="HTTP timeout seconds.")
@@ -309,8 +324,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     output = Path(args.output or f"data/a-share-close-web-{args.date}.json")
-    query_items = default_queries(args.date)
-    query_items.extend({"purpose": "custom", "query": query} for query in args.query)
+    query_items = [] if args.no_default_queries else default_queries(args.date)
+    query_items.extend(query_item_from_arg(query) for query in args.query)
     evidence: dict[str, Any] = {
         "date": args.date,
         "retrieved_at": now_local(),

@@ -31,6 +31,7 @@ DEFAULT_SYMBOLS = [
     {"symbol": "CNH=X", "name": "美元/离岸人民币", "bucket": "fx_rates", "area": "人民币"},
     {"symbol": "^TNX", "name": "美国10年期国债收益率", "bucket": "fx_rates", "area": "利率"},
     {"symbol": "GC=F", "name": "COMEX黄金", "bucket": "commodities", "area": "黄金"},
+    {"symbol": "SI=F", "name": "COMEX白银", "bucket": "commodities", "area": "白银"},
     {"symbol": "CL=F", "name": "WTI原油", "bucket": "commodities", "area": "原油"},
     {"symbol": "HG=F", "name": "COMEX铜", "bucket": "commodities", "area": "有色金属"},
 ]
@@ -88,13 +89,20 @@ def request_json(url: str, timeout: int, retries: int) -> dict[str, Any]:
 
 def yahoo_chart(symbol: str, timeout: int, retries: int) -> dict[str, Any]:
     encoded = urllib.parse.quote(symbol, safe="")
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=5d&interval=1d"
-    payload = request_json(url, timeout, retries)
-    result = (payload.get("chart") or {}).get("result") or []
-    if not result:
-        error = (payload.get("chart") or {}).get("error")
-        raise RuntimeError(str(error or "empty Yahoo chart result"))
-    return result[0]
+    last_error: Exception | None = None
+    for host in ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]:
+        url = f"https://{host}/v8/finance/chart/{encoded}?range=5d&interval=1d"
+        try:
+            payload = request_json(url, timeout, retries)
+            result = (payload.get("chart") or {}).get("result") or []
+            if result:
+                result[0].setdefault("_source_host", host)
+                return result[0]
+            error = (payload.get("chart") or {}).get("error")
+            last_error = RuntimeError(str(error or "empty Yahoo chart result"))
+        except Exception as exc:
+            last_error = exc
+    raise last_error or RuntimeError("empty Yahoo chart result")
 
 
 def last_two(values: list[Any]) -> tuple[float | None, float | None]:
@@ -142,6 +150,7 @@ def parse_quote(symbol_info: dict[str, str], chart: dict[str, Any]) -> dict[str,
         "pct": pct,
         "currency": meta.get("currency"),
         "exchange": meta.get("exchangeName") or meta.get("fullExchangeName"),
+        "source": chart.get("_source_host") or "Yahoo Finance chart endpoint",
         "source_time": meta.get("regularMarketTime"),
     }
 
@@ -269,10 +278,12 @@ def impact_paths(quotes: list[dict[str, Any]]) -> list[dict[str, str]]:
     copper = pct_by_symbol(quotes, "HG=F")
     oil = pct_by_symbol(quotes, "CL=F")
     gold = pct_by_symbol(quotes, "GC=F")
+    silver = pct_by_symbol(quotes, "SI=F")
     commodity_bits = [
+        f"黄金{format_pct(gold)}" if gold is not None else "",
+        f"白银{format_pct(silver)}" if silver is not None else "",
         f"铜{format_pct(copper)}" if copper is not None else "",
         f"原油{format_pct(oil)}" if oil is not None else "",
-        f"黄金{format_pct(gold)}" if gold is not None else "",
     ]
     commodity_text = ", ".join(bit for bit in commodity_bits if bit)
     if commodity_text:
@@ -280,8 +291,8 @@ def impact_paths(quotes: list[dict[str, Any]]) -> list[dict[str, str]]:
             {
                 "event": f"大宗商品线索：{commodity_text}",
                 "impact": "可能影响资源品、防御资产和通胀交易方向",
-                "areas": "有色、石油石化、黄金、周期股",
-                "confirmation": "观察资源股是否有量价确认，黄金方向是否与避险情绪共振",
+                "areas": "贵金属、有色金属、铜、石油石化、周期股",
+                "confirmation": "观察黄金、白银、铜和有色金属方向是否有量价确认，贵金属是否与避险情绪共振",
             }
         )
 
@@ -317,6 +328,7 @@ def build_brief(date: str, quotes: list[dict[str, Any]], errors: list[str]) -> d
             "观察开盘强弱，以及高开低走或低开修复是否出现。",
             "观察人民币、港股、中概和A股权重是否共振。",
             "观察科技成长或资源品线索是否在第一小时扩散。",
+            "观察黄金、白银、铜和有色金属板块是否跟随外盘商品线索。",
             "观察成交额是否支持风险偏好修复。",
         ],
         "risks": [

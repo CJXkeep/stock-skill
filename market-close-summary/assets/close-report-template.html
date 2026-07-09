@@ -18,8 +18,8 @@
       --white: #ffffff;
       --muted: #929aa5;
       --muted-2: #707a8a;
-      --up: #0ecb81;
-      --down: #f6465d;
+      --up: #f6465d;
+      --down: #0ecb81;
       --flat: #707a8a;
       --warn: #f0b90b;
       --radius: 8px;
@@ -187,7 +187,7 @@
     }
 
     .section-grid {
-      grid-template-columns: 1.1fr 0.9fr;
+      grid-template-columns: 1fr 1fr;
       align-items: start;
     }
 
@@ -496,6 +496,66 @@
       gap: 14px;
     }
 
+    .detail-panel {
+      margin-top: 14px;
+    }
+
+    .details-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 42px;
+      padding: 11px 14px;
+      color: var(--white);
+      cursor: pointer;
+      font-weight: 700;
+      list-style: none;
+    }
+
+    summary::-webkit-details-marker {
+      display: none;
+    }
+
+    summary::after {
+      content: "+";
+      color: var(--primary);
+      font-family: BinancePlex, "IBM Plex Sans", Inter, sans-serif;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    details[open] summary::after {
+      content: "-";
+    }
+
+    .detail-body {
+      padding: 0 14px 14px;
+      overflow-x: auto;
+    }
+
+    .detail-body table {
+      min-width: 760px;
+    }
+
+    .detail-note {
+      margin-bottom: 10px;
+      color: var(--muted-2);
+      font-size: 12px;
+    }
+
     ul, ol {
       margin: 0;
       padding-left: 20px;
@@ -710,6 +770,31 @@
         </section>
 
         <section>
+          <h2>金银铜与有色金属</h2>
+          <p>{{metal_summary}}</p>
+          <div class="two-col" style="margin-top:14px;">
+            <div>
+              <div class="eyebrow">相关行业</div>
+              <div class="rank-list">{{metal_sector_bars}}</div>
+            </div>
+            <div>
+              <div class="eyebrow">相关题材</div>
+              <div class="rank-list">{{metal_theme_bars}}</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <div class="stack">
+        <section>
+          <h2>异动归因</h2>
+          <ol>
+            {{catalyst_items}}
+          </ol>
+        </section>
+
+        <section>
           <h2>题材热度</h2>
           <div class="tag-row">{{theme_tags}}</div>
           <p style="margin-top:12px;">{{theme_commentary}}</p>
@@ -723,15 +808,6 @@
               <div class="rank-list">{{theme_lagger_bars}}</div>
             </div>
           </div>
-        </section>
-      </div>
-
-      <div class="stack">
-        <section>
-          <h2>异动归因</h2>
-          <ol>
-            {{catalyst_items}}
-          </ol>
         </section>
 
         <section>
@@ -754,6 +830,145 @@
       <div><strong>来源说明</strong>：{{source_note}}</div>
       <div>数据源：{{sources}}｜抓取时间：{{retrieved_at}}</div>
     </div>
+
+    <section class="detail-panel">
+      <h2>展开查看明细</h2>
+      <div class="details-grid">
+        <details>
+          <summary>主要指数原始明细</summary>
+          <div class="detail-body">
+            <p class="detail-note">包含代码、收盘、涨跌、成交字段和来源，便于核对图表背后的基础数据。</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>指数</th>
+                  <th>代码</th>
+                  <th>收盘</th>
+                  <th>涨跌</th>
+                  <th>涨跌幅</th>
+                  <th>成交量</th>
+                  <th>成交额</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{index_detail_rows}}</tbody>
+            </table>
+          </div>
+        </details>
+
+        <details>
+          <summary>行业领涨/领跌明细</summary>
+          <div class="detail-body">
+            <p class="detail-note">领涨和领跌行业展示更多行，并保留领涨股、行业内部上涨/下跌数量和来源。</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>领涨行业</th>
+                  <th>涨跌幅</th>
+                  <th>成交/热度</th>
+                  <th>上涨/下跌</th>
+                  <th>领涨股</th>
+                  <th>领涨股涨跌</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{sector_leader_detail_rows}}</tbody>
+            </table>
+            <table style="margin-top:12px;">
+              <thead>
+                <tr>
+                  <th>领跌行业</th>
+                  <th>涨跌幅</th>
+                  <th>成交/热度</th>
+                  <th>上涨/下跌</th>
+                  <th>代表股</th>
+                  <th>代表股涨跌</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{sector_lagger_detail_rows}}</tbody>
+            </table>
+          </div>
+        </details>
+
+        <details>
+          <summary>题材/概念明细与事件线索</summary>
+          <div class="detail-body">
+            <p class="detail-note">概念数据可能混合涨幅榜和事件摘要，适合作为线索，不应单独当作主线强度证据。</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>活跃题材</th>
+                  <th>涨跌幅</th>
+                  <th>日期</th>
+                  <th>代表</th>
+                  <th>数量/换手</th>
+                  <th>事件线索</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{theme_leader_detail_rows}}</tbody>
+            </table>
+            <table style="margin-top:12px;">
+              <thead>
+                <tr>
+                  <th>弱势题材</th>
+                  <th>涨跌幅</th>
+                  <th>日期</th>
+                  <th>代表</th>
+                  <th>数量/换手</th>
+                  <th>事件线索</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{theme_lagger_detail_rows}}</tbody>
+            </table>
+          </div>
+        </details>
+
+        <details>
+          <summary>金银铜/有色金属明细</summary>
+          <div class="detail-body">
+            <p class="detail-note">盘后侧展示A股行业和题材映射；外盘金银铜价格请结合盘前简报或商品行情源核对。</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>相关行业</th>
+                  <th>涨跌幅</th>
+                  <th>成交/热度</th>
+                  <th>上涨/下跌</th>
+                  <th>领涨股</th>
+                  <th>领涨股涨跌</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{metal_sector_detail_rows}}</tbody>
+            </table>
+            <table style="margin-top:12px;">
+              <thead>
+                <tr>
+                  <th>相关题材</th>
+                  <th>涨跌幅</th>
+                  <th>日期</th>
+                  <th>代表</th>
+                  <th>数量/换手</th>
+                  <th>事件线索</th>
+                  <th>来源</th>
+                </tr>
+              </thead>
+              <tbody>{{metal_theme_detail_rows}}</tbody>
+            </table>
+          </div>
+        </details>
+
+        <details>
+          <summary>数据来源、缺口与采集异常</summary>
+          <div class="detail-body">
+            <ul>{{data_quality_detail_items}}</ul>
+          </div>
+        </details>
+      </div>
+    </section>
 
     <footer>
       本报告用于市场复盘和交易环境观察，不构成个性化投资建议。

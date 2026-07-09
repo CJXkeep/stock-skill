@@ -30,7 +30,7 @@ Or run the checks manually.
 Run Python syntax checks:
 
 ```bash
-python -m py_compile market-close-summary/scripts/collect_a_share_close.py market-close-summary/scripts/collect_web_research_fallback.py market-close-summary/scripts/prepare_llm_analysis_context.py market-close-summary/scripts/render_close_report.py market-morning-brief/scripts/collect_morning_brief_sources.py market-morning-brief/scripts/render_morning_brief.py
+python -m py_compile market-close-summary/scripts/collect_a_share_close.py market-close-summary/scripts/collect_web_research_fallback.py market-close-summary/scripts/prepare_llm_analysis_context.py market-close-summary/scripts/run_close_review.py market-close-summary/scripts/render_close_report.py market-morning-brief/scripts/collect_morning_brief_sources.py market-morning-brief/scripts/run_morning_brief.py market-morning-brief/scripts/render_morning_brief.py
 ```
 
 Render the included close-review sample:
@@ -50,6 +50,8 @@ Optionally run live free-source collection:
 ```bash
 python market-close-summary/scripts/collect_a_share_close.py --date YYYY-MM-DD --output data/release-check-close.json
 python market-morning-brief/scripts/collect_morning_brief_sources.py --date YYYY-MM-DD --output data/release-check-morning.json
+python market-close-summary/scripts/run_close_review.py --date YYYY-MM-DD --report reports/release-check-close-auto.html
+python market-morning-brief/scripts/run_morning_brief.py --date YYYY-MM-DD --report reports/release-check-morning-auto.html
 ```
 
 ## Skill-Specific Checks
@@ -59,11 +61,13 @@ For `market-close-summary`:
 - Verify `scripts/collect_a_share_close.py --help` documents data collection, retries, and cache cleanup.
 - Verify `scripts/collect_web_research_fallback.py --help` documents search fallback options.
 - Verify `scripts/prepare_llm_analysis_context.py --help` documents snapshot and web-evidence inputs.
+- Verify `scripts/run_close_review.py --help` documents the automatic fallback pipeline.
 - Verify rendered HTML does not imply missing web-search or free-source data is fully verified.
 
 For `market-morning-brief`:
 
 - Verify `scripts/collect_morning_brief_sources.py --help` documents the seed JSON workflow.
+- Verify `scripts/run_morning_brief.py --help` documents the automatic fallback pipeline.
 - Verify `scripts/render_morning_brief.py --help` documents template, output, and date overrides.
 - Verify `overall_tone` values match the contract in `references/platform-integration.md`.
 - Verify `raw_quotes` stays diagnostic and is not shown in the default report.
@@ -73,7 +77,8 @@ For `market-morning-brief`:
 - Do not present free public endpoints as official market data.
 - Keep AkShare optional; the close collector must degrade when it is missing.
 - Treat Yahoo Finance public chart data as delayed context for the morning brief.
-- Mark search-derived close reviews as `搜索补足` or `数据不足` when exact figures are missing.
+- Mark search-derived close reviews as `搜索补足` when exact figures are missing, with explicit field gaps.
+- Do not leave missing morning evidence as a dead end; run the morning fallback pipeline and label search evidence separately from verified prices.
 - Prefer official policy, exchange, and company sources before media summaries.
 
 ## Publish Notes
