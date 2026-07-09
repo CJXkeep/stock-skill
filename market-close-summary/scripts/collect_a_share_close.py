@@ -9,7 +9,9 @@ fed into the market-close-summary skill.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import io
 import json
 import sys
 import time
@@ -27,6 +29,16 @@ EASTMONEY_HEADERS = {
     "Referer": "https://quote.eastmoney.com/",
 }
 
+SINA_HEADERS = {
+    "User-Agent": EASTMONEY_HEADERS["User-Agent"],
+    "Referer": "https://finance.sina.com.cn/",
+}
+
+TENCENT_HEADERS = {
+    "User-Agent": EASTMONEY_HEADERS["User-Agent"],
+    "Referer": "https://gu.qq.com/",
+}
+
 INDEX_SECIDS = {
     "000001": "上证指数",
     "399001": "深证成指",
@@ -36,6 +48,18 @@ INDEX_SECIDS = {
     "000905": "中证500",
     "000852": "中证1000",
 }
+
+SINA_INDEX_SYMBOLS = {
+    "000001": "s_sh000001",
+    "399001": "s_sz399001",
+    "399006": "s_sz399006",
+    "000688": "s_sh000688",
+    "000300": "s_sh000300",
+    "000905": "s_sh000905",
+    "000852": "s_sh000852",
+}
+
+TENCENT_INDEX_SYMBOLS = dict(SINA_INDEX_SYMBOLS)
 
 CACHE_FILE_PREFIX = "a-share-close-"
 CACHE_FILE_SUFFIX = ".json"
@@ -126,6 +150,21 @@ def request_json_once(url: str, timeout: int) -> dict[str, Any]:
     return json.loads(raw[start : end + 1])
 
 
+def request_text(url: str, timeout: int, retries: int, headers: dict[str, str]) -> str:
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        if attempt:
+            time.sleep(min(0.5 * attempt, 2.0))
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+            return raw.decode("gbk", errors="replace")
+        except Exception as exc:
+            last_error = exc
+    raise last_error or RuntimeError("request failed")
+
+
 def em_url(path: str, params: dict[str, Any]) -> str:
     query = urllib.parse.urlencode(params)
     return f"https://push2.eastmoney.com/api/{path}?{query}"
@@ -190,6 +229,8 @@ def eastmoney_clist(
 def collect_eastmoney_indexes(
     snapshot: dict[str, Any], timeout: int, retries: int
 ) -> None:
+    if snapshot.get("indexes"):
+        return
     secids = "1.000001,0.399001,0.399006,1.000688,1.000300,1.000905,1.000852"
     url = em_url(
         "qt/ulist.np/get",
@@ -225,6 +266,84 @@ def collect_eastmoney_indexes(
     add_source(snapshot, "Eastmoney")
 
 
+def collect_sina_indexes(snapshot: dict[str, Any], timeout: int, retries: int) -> None:
+    if snapshot.get("indexes"):
+        return
+    symbols = ",".join(SINA_INDEX_SYMBOLS.values())
+    url = f"https://hq.sinajs.cn/list={symbols}"
+    text = request_text(url, timeout, retries, SINA_HEADERS)
+    rows_by_symbol: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if not line.startswith("var hq_str_") or '="' not in line:
+            continue
+        symbol = line.split("var hq_str_", 1)[1].split("=", 1)[0]
+        payload = line.split('="', 1)[1].rsplit('";', 1)[0]
+        values = payload.split(",")
+        if len(values) >= 4 and values[0]:
+            rows_by_symbol[symbol] = values
+
+    indexes = []
+    for code, symbol in SINA_INDEX_SYMBOLS.items():
+        values = rows_by_symbol.get(symbol)
+        if not values:
+            continue
+        indexes.append(
+            {
+                "code": code,
+                "name": values[0] or INDEX_SECIDS.get(code),
+                "close": safe_float(values[1]),
+                "change": safe_float(values[2]),
+                "change_pct": safe_float(values[3]),
+                "volume": safe_float(values[4]) if len(values) > 4 else None,
+                "amount": safe_float(values[5]) if len(values) > 5 else None,
+                "source": "Sina hq.sinajs.cn",
+            }
+        )
+    if not indexes:
+        raise ValueError("Sina index endpoint returned no rows")
+    snapshot["indexes"] = indexes
+    add_source(snapshot, "Sina")
+
+
+def collect_tencent_indexes(snapshot: dict[str, Any], timeout: int, retries: int) -> None:
+    if snapshot.get("indexes"):
+        return
+    symbols = ",".join(TENCENT_INDEX_SYMBOLS.values())
+    url = f"https://qt.gtimg.cn/q={symbols}"
+    text = request_text(url, timeout, retries, TENCENT_HEADERS)
+    rows_by_symbol: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if not line.startswith("v_") or '="' not in line:
+            continue
+        symbol = line.split("v_", 1)[1].split("=", 1)[0]
+        payload = line.split('="', 1)[1].rsplit('";', 1)[0]
+        values = payload.split("~")
+        if len(values) >= 6 and values[1]:
+            rows_by_symbol[symbol] = values
+
+    indexes = []
+    for code, symbol in TENCENT_INDEX_SYMBOLS.items():
+        values = rows_by_symbol.get(symbol)
+        if not values:
+            continue
+        indexes.append(
+            {
+                "code": code,
+                "name": values[1] or INDEX_SECIDS.get(code),
+                "close": safe_float(values[3]),
+                "change": safe_float(values[4]),
+                "change_pct": safe_float(values[5]),
+                "volume": safe_float(values[6]) if len(values) > 6 else None,
+                "amount": safe_float(values[7]) if len(values) > 7 else None,
+                "source": "Tencent qt.gtimg.cn",
+            }
+        )
+    if not indexes:
+        raise ValueError("Tencent index endpoint returned no rows")
+    snapshot["indexes"] = indexes
+    add_source(snapshot, "Tencent")
+
+
 def collect_eastmoney_a_stock_breadth(
     snapshot: dict[str, Any],
     timeout: int,
@@ -232,6 +351,10 @@ def collect_eastmoney_a_stock_breadth(
     max_stocks: int,
     page_delay: float,
 ) -> None:
+    existing = snapshot.get("breadth") or {}
+    if existing and not existing.get("is_partial"):
+        return
+
     fs = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
     fields = "f12,f14,f2,f3,f6"
     page_size = min(max(max_stocks, 1), 1000)
@@ -390,6 +513,203 @@ def first_existing(row: dict[str, Any], names: list[str]) -> Any:
     return None
 
 
+def quiet_call(func: Any) -> Any:
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        return func()
+
+
+def collect_akshare_indexes(snapshot: dict[str, Any], ak: Any) -> bool:
+    if snapshot.get("indexes") or not hasattr(ak, "stock_zh_index_spot_em"):
+        return False
+    rows = df_records(quiet_call(ak.stock_zh_index_spot_em))
+    if not rows:
+        return False
+
+    by_code: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        code = str(first_existing(row, ["代码", "code", "f12"]) or "")
+        if code in INDEX_SECIDS:
+            by_code[code] = row
+
+    indexes = []
+    for code, name in INDEX_SECIDS.items():
+        row = by_code.get(code)
+        if not row:
+            continue
+        indexes.append(
+            {
+                "code": code,
+                "name": first_existing(row, ["名称", "name", "f14"]) or name,
+                "close": safe_float(first_existing(row, ["最新价", "收盘", "close", "f2"])),
+                "change_pct": safe_float(first_existing(row, ["涨跌幅", "涨跌幅%", "change_pct", "f3"])),
+                "change": safe_float(first_existing(row, ["涨跌额", "change", "f4"])),
+                "volume": safe_float(first_existing(row, ["成交量", "volume", "f5"])),
+                "amount": safe_float(first_existing(row, ["成交额", "amount", "f6"])),
+                "open": safe_float(first_existing(row, ["今开", "open", "f17"])),
+                "previous_close": safe_float(first_existing(row, ["昨收", "previous_close", "f18"])),
+                "source": "AkShare/Eastmoney stock_zh_index_spot_em",
+            }
+        )
+    if not indexes:
+        return False
+    snapshot["indexes"] = indexes
+    return True
+
+
+def collect_akshare_a_stock_breadth(snapshot: dict[str, Any], ak: Any) -> bool:
+    existing = snapshot.get("breadth") or {}
+    if existing and not existing.get("is_partial"):
+        return False
+    rows: list[dict[str, Any]] = []
+    source_name = ""
+    for func_name in ["stock_zh_a_spot", "stock_zh_a_spot_em"]:
+        if not hasattr(ak, func_name):
+            continue
+        try:
+            rows = df_records(quiet_call(getattr(ak, func_name)))
+            if rows:
+                source_name = func_name
+                break
+        except Exception as exc:
+            add_error(snapshot, f"AkShare {func_name}", exc)
+    if not rows:
+        return False
+
+    rising = falling = flat = suspended = 0
+    total_amount = 0.0
+    amount_count = 0
+    for row in rows:
+        pct = safe_float(first_existing(row, ["涨跌幅", "涨跌幅%", "change_pct", "f3"]))
+        amount = safe_float(first_existing(row, ["成交额", "amount", "f6"]))
+        if pct is None:
+            suspended += 1
+        elif pct > 0:
+            rising += 1
+        elif pct < 0:
+            falling += 1
+        else:
+            flat += 1
+        if amount is not None:
+            total_amount += amount
+            amount_count += 1
+
+    snapshot["breadth"] = {
+        "rising": rising,
+        "falling": falling,
+        "flat": flat,
+        "suspended_or_missing": suspended,
+        "sample_size": len(rows),
+        "total_universe_count": len(rows),
+        "requested_count": len(rows),
+        "returned_count": len(rows),
+        "is_partial": False,
+        "sample_bias": None,
+        "source": f"AkShare {source_name}",
+    }
+    snapshot["turnover"] = {
+        "amount_cny": total_amount if amount_count else None,
+        "stock_count_used": amount_count,
+        "is_partial": False,
+        "source": f"AkShare {source_name} aggregation",
+        "note": "Approximate sum over A-share spot rows; verify against exchange or vendor total when precision matters.",
+    }
+    return True
+
+
+def collect_akshare_ths_industry_summary(snapshot: dict[str, Any], ak: Any) -> bool:
+    if (snapshot.get("sectors") or {}).get("leading") or not hasattr(ak, "stock_board_industry_summary_ths"):
+        return False
+    rows = df_records(quiet_call(ak.stock_board_industry_summary_ths))
+    if not rows:
+        return False
+    ordered = sorted(
+        rows,
+        key=lambda r: safe_float(first_existing(r, ["涨跌幅", "涨跌幅%"])) or 0,
+        reverse=True,
+    )
+
+    def item(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": first_existing(row, ["板块", "板块名称", "名称", "name"]),
+            "change_pct": safe_float(first_existing(row, ["涨跌幅", "涨跌幅%"])),
+            "amount": safe_float(first_existing(row, ["总成交额", "成交额"])),
+            "rising_count": safe_float(first_existing(row, ["上涨家数"])),
+            "falling_count": safe_float(first_existing(row, ["下跌家数"])),
+            "leader": first_existing(row, ["领涨股"]),
+            "leader_change_pct": safe_float(first_existing(row, ["领涨股-涨跌幅"])),
+            "source": "AkShare/同花顺 stock_board_industry_summary_ths",
+        }
+
+    snapshot["sectors"]["leading"] = [item(row) for row in ordered[:10]]
+    snapshot["sectors"]["lagging"] = [item(row) for row in ordered[-10:][::-1]]
+
+    if not snapshot.get("breadth"):
+        rising_total = 0.0
+        falling_total = 0.0
+        amount_total = 0.0
+        amount_count = 0
+        for row in rows:
+            rising = safe_float(first_existing(row, ["上涨家数"]))
+            falling = safe_float(first_existing(row, ["下跌家数"]))
+            amount = safe_float(first_existing(row, ["总成交额", "成交额"]))
+            if rising is not None:
+                rising_total += rising
+            if falling is not None:
+                falling_total += falling
+            if amount is not None:
+                amount_total += amount * 100_000_000
+                amount_count += 1
+        if rising_total or falling_total:
+            total_count = int(rising_total + falling_total)
+            snapshot["breadth"] = {
+                "rising": int(rising_total),
+                "falling": int(falling_total),
+                "flat": 0,
+                "suspended_or_missing": 0,
+                "sample_size": total_count,
+                "total_universe_count": total_count,
+                "requested_count": total_count,
+                "returned_count": total_count,
+                "is_partial": False,
+                "sample_bias": None,
+                "source": "AkShare/同花顺 industry summary aggregation",
+                "note": "Aggregated from THS industry rising/falling counts; use as a market-breadth fallback when full A-share spot rows are unavailable.",
+            }
+        if amount_count and not snapshot.get("turnover"):
+            snapshot["turnover"] = {
+                "amount_cny": amount_total,
+                "stock_count_used": amount_count,
+                "is_partial": False,
+                "source": "AkShare/同花顺 industry summary aggregation",
+                "note": "Aggregated from THS industry total turnover; verify against exchange or vendor total when precision matters.",
+            }
+    return True
+
+
+def collect_akshare_ths_concept_summary(snapshot: dict[str, Any], ak: Any) -> bool:
+    if (snapshot.get("themes") or {}).get("active") or not hasattr(ak, "stock_board_concept_summary_ths"):
+        return False
+    rows = df_records(quiet_call(ak.stock_board_concept_summary_ths))
+    if not rows:
+        return False
+    items = []
+    for row in rows[:12]:
+        items.append(
+            {
+                "name": first_existing(row, ["概念名称", "板块名称", "名称", "name"]),
+                "date": first_existing(row, ["日期"]),
+                "driver_event": first_existing(row, ["驱动事件"]),
+                "leader": first_existing(row, ["龙头股"]),
+                "constituent_count": safe_float(first_existing(row, ["成分股数量"])),
+                "source": "AkShare/同花顺 stock_board_concept_summary_ths",
+            }
+        )
+    if not items:
+        return False
+    snapshot["themes"]["active"] = items
+    return True
+
+
 def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
     try:
         import akshare as ak  # type: ignore
@@ -399,8 +719,18 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
     wrote = False
 
     try:
+        wrote = collect_akshare_indexes(snapshot, ak) or wrote
+    except Exception as exc:
+        add_error(snapshot, "AkShare indexes", exc)
+
+    try:
+        wrote = collect_akshare_a_stock_breadth(snapshot, ak) or wrote
+    except Exception as exc:
+        add_error(snapshot, "AkShare A-share breadth", exc)
+
+    try:
         if hasattr(ak, "stock_board_industry_name_em"):
-            rows = df_records(ak.stock_board_industry_name_em())
+            rows = df_records(quiet_call(ak.stock_board_industry_name_em))
             if rows:
                 ordered = sorted(
                     rows,
@@ -428,8 +758,13 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
         add_error(snapshot, "AkShare industry boards", exc)
 
     try:
+        wrote = collect_akshare_ths_industry_summary(snapshot, ak) or wrote
+    except Exception as exc:
+        add_error(snapshot, "AkShare THS industry summary", exc)
+
+    try:
         if hasattr(ak, "stock_board_concept_name_em"):
-            rows = df_records(ak.stock_board_concept_name_em())
+            rows = df_records(quiet_call(ak.stock_board_concept_name_em))
             if rows:
                 ordered = sorted(
                     rows,
@@ -457,8 +792,13 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
         add_error(snapshot, "AkShare concept boards", exc)
 
     try:
+        wrote = collect_akshare_ths_concept_summary(snapshot, ak) or wrote
+    except Exception as exc:
+        add_error(snapshot, "AkShare THS concept summary", exc)
+
+    try:
         if hasattr(ak, "stock_zt_pool_em"):
-            rows = df_records(ak.stock_zt_pool_em(date=yyyymmdd(date)))
+            rows = df_records(quiet_call(lambda: ak.stock_zt_pool_em(date=yyyymmdd(date))))
             snapshot["limit_stats"]["limit_up_count"] = len(rows)
             snapshot["limit_stats"]["limit_up_source"] = "AkShare/Eastmoney stock_zt_pool_em"
             wrote = True
@@ -467,7 +807,7 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
 
     try:
         if hasattr(ak, "stock_zt_pool_dtgc_em"):
-            rows = df_records(ak.stock_zt_pool_dtgc_em(date=yyyymmdd(date)))
+            rows = df_records(quiet_call(lambda: ak.stock_zt_pool_dtgc_em(date=yyyymmdd(date))))
             snapshot["limit_stats"]["limit_down_count"] = len(rows)
             snapshot["limit_stats"]["limit_down_source"] = "AkShare/Eastmoney stock_zt_pool_dtgc_em"
             wrote = True
@@ -481,7 +821,7 @@ def collect_akshare(snapshot: dict[str, Any], date: str) -> None:
 def write_json(snapshot: dict[str, Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        json.dumps(snapshot, ensure_ascii=False, indent=2),
+        json.dumps(snapshot, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
 
@@ -626,6 +966,14 @@ def main() -> int:
             add_error(snapshot, "AkShare", exc)
 
     for name, func in [
+        (
+            "Tencent indexes",
+            lambda: collect_tencent_indexes(snapshot, args.timeout, args.retries),
+        ),
+        (
+            "Sina indexes",
+            lambda: collect_sina_indexes(snapshot, args.timeout, args.retries),
+        ),
         (
             "Eastmoney indexes",
             lambda: collect_eastmoney_indexes(snapshot, args.timeout, args.retries),

@@ -1,4 +1,4 @@
 interface:
   display_name: "A股收盘复盘"
-  short_description: "A-share market close review workflow"
-  default_prompt: "Use $market-close-summary to summarize today's A-share market close and produce tomorrow's observation checklist."
+  short_description: "A-share close review with data/search fallback"
+  default_prompt: "Use $market-close-summary to collect or search today's A-share close facts, write a concise review, and render a visual report if useful."

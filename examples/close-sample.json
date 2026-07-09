@@ -1,0 +1,84 @@
+{
+  "date": "2026-07-08",
+  "retrieved_at": "2026-07-08 15:30:00",
+  "sources": ["sample data"],
+  "errors": [],
+  "indexes": [
+    {
+      "code": "000001",
+      "name": "上证指数",
+      "close": 3500.12,
+      "pct": 0.42
+    },
+    {
+      "code": "399001",
+      "name": "深证成指",
+      "close": 10820.35,
+      "pct": 0.18
+    },
+    {
+      "code": "399006",
+      "name": "创业板指",
+      "close": 2188.76,
+      "pct": -0.31
+    }
+  ],
+  "turnover": {
+    "total_amount": 930000000000
+  },
+  "breadth": {
+    "rising_count": 2850,
+    "falling_count": 2050,
+    "is_partial": false
+  },
+  "limit_stats": {
+    "limit_up_count": 58,
+    "limit_down_count": 12
+  },
+  "sectors": {
+    "leading": [
+      {
+        "name": "半导体",
+        "pct": 2.65
+      },
+      {
+        "name": "通信设备",
+        "pct": 1.94
+      }
+    ],
+    "lagging": [
+      {
+        "name": "房地产",
+        "pct": -1.42
+      },
+      {
+        "name": "煤炭",
+        "pct": -0.88
+      }
+    ]
+  },
+  "themes": {
+    "active": [
+      {
+        "name": "AI算力",
+        "pct": 3.18,
+        "driver_event": "海外科技映射与产业订单预期升温"
+      },
+      {
+        "name": "机器人",
+        "pct": 2.22,
+        "driver_event": "产业会议临近带动事件预期"
+      }
+    ],
+    "weak": [
+      {
+        "name": "地产链",
+        "pct": -1.55
+      }
+    ]
+  },
+  "flows": {},
+  "intraday_notes": ["指数震荡走高，但创业板相对偏弱。"],
+  "catalysts": ["科技成长方向延续活跃。"],
+  "notes": ["示例数据仅用于渲染 smoke test，不代表真实行情。"]
+}

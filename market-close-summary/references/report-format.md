@@ -27,12 +27,12 @@ Keep the daily review stable across days. Use these dimensions in this order:
 7. **Tomorrow's observation checklist**
    Convert the review into falsifiable points: turnover threshold, index confirmation/invalidation, theme continuation condition, and risk trigger.
 
-8. **Data quality**
-   State data sources, retrieval time, missing fields, partial samples, and cross-check needs.
+8. **Source note**
+   Keep data sources, retrieval time, and major missing fields in a compact footer or internal notes. Do not make source quality a main visual section unless the user asks for diagnostics.
 
 ## Format Recommendation
 
-Use Markdown by default for chat, notes, version control, and long-form reasoning. Use HTML when the user wants a more visual daily report, browser viewing, screenshots, or repeated review archives.
+Use Markdown by default for chat, notes, version control, and long-form reasoning. Use HTML when the user wants a more visual daily report, browser viewing, screenshots, or repeated review archives. The fixed HTML template is Binance-inspired: near-black canvas, Binance-yellow emphasis, compact financial-dashboard density, small radii, and restrained flat surfaces.
 
 Recommended workflow:
 
@@ -40,6 +40,7 @@ Recommended workflow:
 2. If the user wants a visual report, render the same content into `assets/close-report-template.html`.
 3. Do not let HTML change the analytical logic; it is a presentation layer.
 4. Use `scripts/render_close_report.py <snapshot.json>` to generate the HTML file. Pass `--analysis analysis.json` when narrative fields are available.
+5. If web search supplied the narrative, include `data_mode`, `sources`, and `source_note` in the analysis JSON so the rendered report does not look more precise than the evidence.
 
 ## Markdown Structure
 
@@ -97,12 +98,10 @@ Recommended workflow:
 
 当前更适合【进攻/精选结构/防守/等待】。
 
-## 数据质量
+## 数据来源
 
 - 数据源：
 - 抓取时间：
-- 缺失字段：
-- 需要交叉验证：
 ```
 
 ## HTML Structure
@@ -110,14 +109,27 @@ Recommended workflow:
 Use [assets/close-report-template.html](../assets/close-report-template.html) for a fixed visual report. Keep it static, self-contained, and printable. The HTML should include:
 
 - top conclusion band;
+- data mode/source confidence badges;
 - market temperature badge;
 - key metrics grid;
-- index table;
-- structure and theme sections;
+- market heat meter;
+- market breadth stacked bar;
+- index change bar chart plus index table;
+- leading/lagging industry bar charts;
+- active/weak theme bar charts;
+- structure and theme commentary;
 - risk and tomorrow checklist;
-- data quality footer.
+- compact source footer.
 
 Prefer restrained dashboard styling. Avoid decorative landing-page composition; this report is a repeated work surface.
+
+### Visual Rules
+
+- Use a dark trading-platform canvas by default: `#0b0e11`, card surface `#1e2329`, elevated surface `#2b3139`.
+- Use `#fcd535` only for primary emphasis: conclusion rail, source/data-mode badges, key numbers, and tiny accent lines.
+- Use green/red only for market direction. The default template follows the Binance convention: green for positive/up and red for negative/down. If the target audience requires A-share-native red-up/green-down convention, swap only the CSS tokens, not the renderer logic.
+- Keep typography compact. Use `BinanceNova, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`; use `BinancePlex` or tabular numeric features for numbers when available.
+- Keep cards flat with 1px dark hairlines and no decorative gradients or background effects.
 
 ## Optional Analysis JSON
 
@@ -125,6 +137,9 @@ Prefer restrained dashboard styling. Avoid decorative landing-page composition; 
 
 ```json
 {
+  "data_mode": "结构化数据",
+  "sources": ["AkShare", "Eastmoney"],
+  "source_note": "主要行情来自结构化免费源，催化线索来自公开网页。",
   "market_temperature": "偏弱防守",
   "one_sentence_conclusion": "指数承压且结构分化，明日重点看成交额和主线修复。",
   "market_structure": "权重护盘不足，小盘与高弹性方向承压更明显。",
@@ -138,3 +153,5 @@ Prefer restrained dashboard styling. Avoid decorative landing-page composition; 
 ```
 
 The renderer uses strict template placeholders. If the HTML template contains a placeholder that the renderer does not know how to fill, rendering fails instead of silently emitting a blank field.
+
+For `搜索补足` output, keep `sources` short and put detailed URLs in the Markdown report or `source_note` if needed. Do not put unverified exact figures into narrative fields.

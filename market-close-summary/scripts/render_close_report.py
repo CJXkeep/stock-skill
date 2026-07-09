@@ -75,6 +75,17 @@ def format_amount_cny(value: Any) -> str:
     return f"{number:,.0f}"
 
 
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def format_int(value: Any) -> str:
+    try:
+        return f"{int(float(value)):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
 def list_items(values: list[Any], fallback: str) -> str:
     items = [v for v in values if v not in (None, "")]
     if not items:
@@ -94,6 +105,51 @@ def analysis_value(analysis: dict[str, Any], key: str, fallback: Any = None) -> 
     return analysis.get(key, fallback)
 
 
+def source_names(snapshot: dict[str, Any], analysis: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for value in snapshot.get("sources") or []:
+        text = str(value).strip()
+        if text and text not in names:
+            names.append(text)
+    for value in as_list(analysis_value(analysis, "sources")):
+        text = str(value).strip()
+        if text and text not in names:
+            names.append(text)
+    return names or ["无成功来源"]
+
+
+def infer_data_mode(snapshot: dict[str, Any], analysis: dict[str, Any]) -> str:
+    explicit = analysis_value(analysis, "data_mode")
+    if explicit:
+        return str(explicit)
+    has_structured = any(
+        [
+            snapshot.get("indexes"),
+            snapshot.get("breadth"),
+            snapshot.get("limit_stats"),
+            (snapshot.get("sectors") or {}).get("leading"),
+            (snapshot.get("themes") or {}).get("active"),
+        ]
+    )
+    if has_structured:
+        return "结构化数据"
+    if analysis_value(analysis, "sources") or analysis_value(analysis, "source_note"):
+        return "搜索补足"
+    return "数据不足"
+
+
+def source_note(snapshot: dict[str, Any], analysis: dict[str, Any]) -> str:
+    explicit = analysis_value(analysis, "source_note")
+    if explicit:
+        if isinstance(explicit, list):
+            return "；".join(str(item) for item in explicit if item not in (None, ""))
+        return str(explicit)
+    notes = [str(item) for item in (snapshot.get("notes") or [])[:2] if item not in (None, "")]
+    if notes:
+        return "；".join(notes)
+    return "主要结论来自已取得的公开数据与复盘证据。"
+
+
 def average_index_change(snapshot: dict[str, Any]) -> float | None:
     changes = []
     for item in snapshot.get("indexes", []):
@@ -107,17 +163,33 @@ def average_index_change(snapshot: dict[str, Any]) -> float | None:
     return sum(changes) / len(changes)
 
 
-def breadth_ratio(snapshot: dict[str, Any]) -> float | None:
+def breadth_counts(snapshot: dict[str, Any]) -> tuple[int, int, int, int] | None:
     breadth = snapshot.get("breadth") or {}
-    if breadth.get("is_partial"):
+    try:
+        rising = int(float(breadth.get("rising")))
+        falling = int(float(breadth.get("falling")))
+        flat = int(float(breadth.get("flat") or 0))
+        missing = int(float(breadth.get("suspended_or_missing") or 0))
+    except (TypeError, ValueError):
         return None
-    rising = breadth.get("rising")
-    falling = breadth.get("falling")
+    if rising + falling + flat + missing <= 0:
+        return None
+    return rising, falling, flat, missing
+
+
+def breadth_ratio(snapshot: dict[str, Any], *, allow_partial: bool = False) -> float | None:
+    breadth = snapshot.get("breadth") or {}
+    if breadth.get("is_partial") and not allow_partial:
+        return None
+    counts = breadth_counts(snapshot)
+    if counts is None:
+        return None
+    rising, falling, _, _ = counts
     try:
         total = float(rising) + float(falling)
         if total <= 0:
             return None
-        return float(rising) / total
+        return rising / total
     except (TypeError, ValueError):
         return None
 
@@ -125,8 +197,20 @@ def breadth_ratio(snapshot: dict[str, Any]) -> float | None:
 def infer_temperature(snapshot: dict[str, Any]) -> str:
     avg = average_index_change(snapshot)
     ratio = breadth_ratio(snapshot)
+    if ratio is None:
+        ratio = breadth_ratio(snapshot, allow_partial=True)
     if avg is None and ratio is None:
-        return "数据不足"
+        stats = snapshot.get("limit_stats") or {}
+        try:
+            up = float(stats.get("limit_up_count"))
+            down = float(stats.get("limit_down_count"))
+            if up > down * 1.5:
+                return "情绪偏热"
+            if down > up * 1.5:
+                return "情绪偏冷"
+            return "情绪均衡"
+        except (TypeError, ValueError):
+            return "数据不足"
     if avg is not None and avg <= -1.0 and (ratio is None or ratio < 0.35):
         return "风险释放"
     if avg is not None and avg < -0.3:
@@ -135,6 +219,10 @@ def infer_temperature(snapshot: dict[str, Any]) -> str:
         return "强势进攻"
     if avg is not None and avg > 0:
         return "修复偏强"
+    if ratio is not None and ratio >= 0.60:
+        return "结构偏强"
+    if ratio is not None and ratio <= 0.35:
+        return "结构偏弱"
     return "中性震荡"
 
 
@@ -190,7 +278,8 @@ def leading_names(items: list[dict[str, Any]], limit: int = 5) -> list[str]:
         name = item.get("name")
         pct = item.get("change_pct")
         if name:
-            names.append(f"{name} {format_pct(pct)}")
+            pct_text = format_pct(pct)
+            names.append(f"{name} {pct_text}" if pct_text != "-" else str(name))
     return names
 
 
@@ -201,6 +290,160 @@ def render_theme_tags(snapshot: dict[str, Any]) -> str:
     if not tags:
         return '<span class="tag">主线数据缺失</span>'
     return "".join(f'<span class="tag">{esc(tag)}</span>' for tag in tags)
+
+
+def market_heat_score(snapshot: dict[str, Any]) -> float | None:
+    signals = 0
+    score = 50.0
+    avg = average_index_change(snapshot)
+    ratio = breadth_ratio(snapshot, allow_partial=True)
+    if avg is not None:
+        score += clamp(avg * 12, -22, 22)
+        signals += 1
+    if ratio is not None:
+        score += clamp((ratio - 0.5) * 55, -24, 24)
+        signals += 1
+    stats = snapshot.get("limit_stats") or {}
+    try:
+        up = float(stats.get("limit_up_count"))
+        down = float(stats.get("limit_down_count"))
+        if up + down > 0:
+            score += clamp((up - down) / max(up + down, 1) * 14, -14, 14)
+            signals += 1
+    except (TypeError, ValueError):
+        pass
+    if not signals:
+        return None
+    return clamp(score, 0, 100)
+
+
+def render_heat_meter(snapshot: dict[str, Any]) -> str:
+    score = market_heat_score(snapshot)
+    if score is None:
+        return '<div class="empty-state">缺少指数、宽度或涨跌停数据，暂不能计算热度。</div>'
+    if score >= 70:
+        label = "热"
+    elif score >= 55:
+        label = "偏热"
+    elif score >= 45:
+        label = "平衡"
+    elif score >= 30:
+        label = "偏冷"
+    else:
+        label = "冷"
+    return (
+        '<div class="heat-meter">'
+        f'<div class="heat-number">{score:.0f}<span>/100</span></div>'
+        '<div class="heat-track">'
+        f'<div class="heat-fill" style="width:{score:.1f}%"></div>'
+        "</div>"
+        f'<div class="heat-label">{esc(label)}</div>'
+        "</div>"
+    )
+
+
+def render_breadth_chart(snapshot: dict[str, Any]) -> str:
+    counts = breadth_counts(snapshot)
+    if counts is None:
+        return '<div class="empty-state">涨跌家数缺失，无法绘制市场宽度。</div>'
+    rising, falling, flat, missing = counts
+    total = max(rising + falling + flat + missing, 1)
+
+    def piece(label: str, value: int, cls: str) -> str:
+        if value <= 0:
+            return ""
+        width = value / total * 100
+        return (
+            f'<span class="breadth-piece {cls}" style="width:{width:.2f}%" '
+            f'title="{esc(label)} {format_int(value)}"></span>'
+        )
+
+    ratio = breadth_ratio(snapshot, allow_partial=True)
+    ratio_text = "-" if ratio is None else f"{ratio * 100:.0f}%"
+    partial = " · 部分样本" if (snapshot.get("breadth") or {}).get("is_partial") else ""
+    partial_text = esc(partial) if partial else ""
+    return (
+        '<div class="breadth-chart">'
+        '<div class="breadth-bar">'
+        f'{piece("上涨", rising, "rise")}{piece("下跌", falling, "fall")}'
+        f'{piece("平盘", flat, "flat")}{piece("停牌/缺失", missing, "missing")}'
+        "</div>"
+        '<div class="breadth-legend">'
+        f'<span><b class="dot rise"></b>上涨 {format_int(rising)}</span>'
+        f'<span><b class="dot fall"></b>下跌 {format_int(falling)}</span>'
+        f'<span><b class="dot flat"></b>平盘 {format_int(flat)}</span>'
+        f'<span><b class="dot missing"></b>缺失 {format_int(missing)}</span>'
+        f'<strong>上涨占比 {esc(ratio_text)}{partial_text}</strong>'
+        "</div>"
+        "</div>"
+    )
+
+
+def render_index_change_bars(snapshot: dict[str, Any]) -> str:
+    items = []
+    for item in snapshot.get("indexes", []):
+        try:
+            change = float(item.get("change_pct"))
+        except (TypeError, ValueError):
+            continue
+        items.append((item, change))
+    if not items:
+        return '<div class="empty-state">主要指数涨跌幅缺失。</div>'
+    max_abs = max(max(abs(change) for _, change in items), 1.0)
+    rows = []
+    for item, change in items:
+        width = min(abs(change) / max_abs * 50, 50)
+        side_class = "positive" if change >= 0 else "negative"
+        style = f"left:50%;width:{width:.2f}%" if change >= 0 else f"right:50%;width:{width:.2f}%"
+        rows.append(
+            '<div class="bar-row">'
+            f'<div class="bar-name">{esc(item.get("name"))}</div>'
+            '<div class="bar-track diverging"><span class="axis"></span>'
+            f'<span class="bar-fill {side_class}" style="{style}"></span></div>'
+            f'<div class="bar-value {pct_class(change)}">{esc(format_pct(change))}</div>'
+            "</div>"
+        )
+    return "\n".join(rows)
+
+
+def render_rank_bars(items: list[dict[str, Any]], empty_text: str, limit: int = 6) -> str:
+    parsed = []
+    for item in items[:limit]:
+        try:
+            change = float(item.get("change_pct"))
+        except (TypeError, ValueError):
+            continue
+        parsed.append((item, change))
+    if not parsed:
+        if not items:
+            return f'<div class="empty-state">{esc(empty_text)}</div>'
+        rows = []
+        for item in items[:limit]:
+            name = item.get("name")
+            if not name:
+                continue
+            meta = item.get("driver_event") or item.get("leader") or item.get("source") or ""
+            rows.append(
+                '<div class="text-row">'
+                f'<strong>{esc(name)}</strong>'
+                f'<span>{esc(truncate(meta, 44))}</span>'
+                "</div>"
+            )
+        return "\n".join(rows) if rows else f'<div class="empty-state">{esc(empty_text)}</div>'
+    max_abs = max(max(abs(change) for _, change in parsed), 1.0)
+    rows = []
+    for item, change in parsed:
+        width = min(abs(change) / max_abs * 100, 100)
+        cls = "positive" if change >= 0 else "negative"
+        rows.append(
+            '<div class="rank-row">'
+            f'<div class="rank-head"><span>{esc(item.get("name"))}</span>'
+            f'<b class="{pct_class(change)}">{esc(format_pct(change))}</b></div>'
+            '<div class="rank-track">'
+            f'<span class="rank-fill {cls}" style="width:{width:.2f}%"></span>'
+            "</div></div>"
+        )
+    return "\n".join(rows)
 
 
 def turnover_text(snapshot: dict[str, Any]) -> tuple[str, str]:
@@ -256,6 +499,14 @@ def theme_commentary(snapshot: dict[str, Any]) -> str:
         text.append("活跃方向：" + "、".join(active))
     if weak:
         text.append("弱势方向：" + "、".join(weak))
+    drivers = []
+    for item in (snapshot.get("themes") or {}).get("active", [])[:2]:
+        driver = item.get("driver_event")
+        name = item.get("name")
+        if driver and name:
+            drivers.append(f"{name}：{truncate(driver, 36)}")
+    if drivers:
+        text.append("事件线索：" + "；".join(drivers))
     return "；".join(text) + "。"
 
 
@@ -284,6 +535,7 @@ def default_tomorrow_items(snapshot: dict[str, Any]) -> list[str]:
 
 def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[str, str]:
     temperature = analysis_value(analysis, "market_temperature") or infer_temperature(snapshot)
+    sources = source_names(snapshot, analysis)
     turnover, turnover_note = turnover_text(snapshot)
     rising_falling, breadth_note = breadth_text(snapshot)
     limit_up_down, limit_note = limit_text(snapshot)
@@ -295,7 +547,9 @@ def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[st
     return {
         "date": esc(snapshot.get("date")),
         "retrieved_at": esc(snapshot.get("retrieved_at")),
-        "sources": esc(", ".join(snapshot.get("sources") or ["无成功来源"])),
+        "sources": esc(", ".join(sources)),
+        "data_mode": esc(infer_data_mode(snapshot, analysis)),
+        "source_note": esc(source_note(snapshot, analysis)),
         "market_temperature": esc(temperature),
         "one_sentence_conclusion": esc(
             analysis_value(analysis, "one_sentence_conclusion")
@@ -309,6 +563,21 @@ def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[st
         "limit_note": esc(limit_note),
         "main_line_strength": esc(analysis_value(analysis, "main_line_strength", "待确认")),
         "main_line_note": esc(analysis_value(analysis, "main_line_note", "需结合持续性和扩散度")),
+        "market_heat_meter": render_heat_meter(snapshot),
+        "breadth_chart": render_breadth_chart(snapshot),
+        "index_change_bars": render_index_change_bars(snapshot),
+        "sector_leader_bars": render_rank_bars(
+            (snapshot.get("sectors") or {}).get("leading", []), "行业领涨数据缺失。"
+        ),
+        "sector_lagger_bars": render_rank_bars(
+            (snapshot.get("sectors") or {}).get("lagging", []), "行业领跌数据缺失。"
+        ),
+        "theme_leader_bars": render_rank_bars(
+            (snapshot.get("themes") or {}).get("active", []), "活跃题材数据缺失。"
+        ),
+        "theme_lagger_bars": render_rank_bars(
+            (snapshot.get("themes") or {}).get("weak", []), "弱势题材数据缺失。"
+        ),
         "index_rows": render_index_rows(snapshot),
         "market_structure": esc(analysis_value(analysis, "market_structure") or market_structure(snapshot)),
         "theme_tags": render_theme_tags(snapshot),
@@ -316,7 +585,6 @@ def build_context(snapshot: dict[str, Any], analysis: dict[str, Any]) -> dict[st
         "catalyst_items": list_items(catalysts, "暂无足够催化信息。"),
         "risk_items": list_items(risks, "暂无明显风险信号，但需继续观察。"),
         "tomorrow_items": list_items(tomorrow, "继续观察成交额、宽度、主线和风险扩散。"),
-        "data_quality_items": list_items(data_quality_items(snapshot), "数据质量信息缺失。"),
     }
 
 

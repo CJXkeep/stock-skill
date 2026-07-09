@@ -10,6 +10,7 @@ This skill is a filesystem bundle. A compatible agent only needs to:
 2. Load referenced files in `references/` only when needed.
 3. Execute Python scripts in `scripts/` when data collection or HTML rendering is requested.
 4. Treat `assets/close-report-template.html` as a static presentation template.
+5. Expose browsing/search when possible so the skill can use [web-research-fallback.md](web-research-fallback.md) after public API failures.
 
 `agents/openai.yaml` is OpenAI/Codex UI metadata. Other agent runtimes can ignore it safely.
 
@@ -18,7 +19,7 @@ This skill is a filesystem bundle. A compatible agent only needs to:
 - Python 3.10+.
 - Standard library is enough for HTML rendering and Eastmoney public endpoint collection.
 - `akshare` is optional. If unavailable or partially failing, the collector degrades and records errors in JSON.
-- Network access is needed only for live free-source collection. Rendering an existing JSON snapshot is offline.
+- Network access is needed for live free-source collection and optional web-search fallback. Rendering an existing JSON snapshot is offline.
 
 ## Entry Points
 
@@ -26,6 +27,19 @@ Collect a daily snapshot:
 
 ```bash
 python market-close-summary/scripts/collect_a_share_close.py --date YYYY-MM-DD
+```
+
+Collect public web-search fallback evidence:
+
+```bash
+python market-close-summary/scripts/collect_web_research_fallback.py --date YYYY-MM-DD
+python market-close-summary/scripts/collect_web_research_fallback.py --date YYYY-MM-DD --analysis-output data/a-share-close-web-analysis-YYYY-MM-DD.json
+```
+
+Prepare an LLM synthesis context:
+
+```bash
+python market-close-summary/scripts/prepare_llm_analysis_context.py --snapshot data/a-share-close-YYYY-MM-DD.json --web-evidence data/a-share-close-web-YYYY-MM-DD.json
 ```
 
 Render a fixed HTML report:
@@ -46,6 +60,11 @@ python market-close-summary/scripts/render_close_report.py data/a-share-close-YY
 free/public data sources
   -> scripts/collect_a_share_close.py
   -> data/a-share-close-YYYY-MM-DD.json
+  -> optional web research fallback
+  -> scripts/collect_web_research_fallback.py
+  -> data/a-share-close-web-YYYY-MM-DD.json
+  -> scripts/prepare_llm_analysis_context.py
+  -> data/a-share-close-llm-context-YYYY-MM-DD.md
   -> agent analysis using SKILL.md + references/
   -> optional analysis.json
   -> scripts/render_close_report.py
@@ -58,6 +77,9 @@ Agents that want to produce richer HTML reports should emit this optional JSON:
 
 ```json
 {
+  "data_mode": "结构化数据/搜索补足/数据不足",
+  "sources": ["AkShare", "Eastmoney", "财联社收评"],
+  "source_note": "来源与缺口说明",
   "market_temperature": "偏弱防守",
   "one_sentence_conclusion": "一句话结论",
   "market_structure": "市场结构判断",

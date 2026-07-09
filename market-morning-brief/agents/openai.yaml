@@ -1,0 +1,4 @@
+interface:
+  display_name: "A股盘前简报"
+  short_description: "A-share pre-market event brief workflow"
+  default_prompt: "Use $market-morning-brief to summarize overnight events and form today's A-share market watchlist."
